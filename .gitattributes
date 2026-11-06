@@ -1,0 +1,5 @@
+# Keep line endings stable between Windows and Linux (shell scripts and YAML break with CRLF).
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.gif binary
