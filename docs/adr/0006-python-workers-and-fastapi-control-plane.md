@@ -16,7 +16,7 @@ One installable Python package (`deltaflow`, `src/` layout) with:
 - Shared `config`, event model and Kafka helpers.
 
 Tooling: `ruff` for lint and format, `mypy --strict`, `pytest`. Kafka via `confluent-kafka`
-(added in Phase 2 when first used).
+(introduced in Phase 1 for the `tail` tool and integration tests).
 
 ## Consequences
 

@@ -5,8 +5,8 @@ Each phase is one branch (`phase-N-name`), one PR into `main` with green CI, and
 
 | Phase | Scope | Exit criteria |
 |---|---|---|
-| **0. Foundation** | Design doc, ADRs, repo scaffold, Docker Compose stack, FastAPI skeleton, CI | `docker compose up --wait` is healthy; CI green; `/health` responds |
-| **1. Capture** | Sample source schema (`customers`, `products`, `orders`) and seed data, load generator, Debezium connector config and registration script | Insert, update and delete in Postgres appear as events on Kafka topics |
+| **0. Foundation** ✅ | Design doc, ADRs, repo scaffold, Docker Compose stack, FastAPI skeleton, CI | `docker compose up --wait` is healthy; CI green; `/health` responds |
+| **1. Capture** ✅ | Sample source schema (`customers`, `products`, `orders`) and seed data, load generator, Debezium connector config and registration script | Insert, update and delete in Postgres appear as events on Kafka topics |
 | **2. Event model + Elasticsearch sink** | `ChangeEvent` normalisation, consumer framework, ES sink with external-version idempotency, index templates | Row changes appear in Elasticsearch; replaying the topic changes nothing |
 | **3. MongoDB sink** | Guarded upsert for current state, append-only history, analytics aggregations | Same changes land in Mongo; stale events are ignored; history is complete |
 | **4. Reliability** | Manual offset commits, retry with backoff, dead-letter topics, graceful shutdown, tombstone and snapshot handling | Poison events are quarantined; sinks survive restarts without loss |

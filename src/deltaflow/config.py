@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
 
     # Reachable from the host. Inside the compose network the services override these.
+    postgres_dsn: str = "postgresql://deltaflow:deltaflow@localhost:5432/shop"
     kafka_bootstrap_servers: str = "localhost:29092"
     connect_url: str = "http://localhost:8083"
     elasticsearch_url: str = "http://localhost:9200"
