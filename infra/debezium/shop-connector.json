@@ -1,0 +1,30 @@
+{
+  "name": "shop-postgres",
+  "config": {
+    "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+    "tasks.max": "1",
+
+    "database.hostname": "postgres",
+    "database.port": "5432",
+    "database.user": "${POSTGRES_USER}",
+    "database.password": "${POSTGRES_PASSWORD}",
+    "database.dbname": "${POSTGRES_DB}",
+
+    "topic.prefix": "deltaflow",
+    "table.include.list": "public.customers,public.products,public.orders",
+
+    "plugin.name": "pgoutput",
+    "slot.name": "deltaflow_slot",
+    "publication.name": "deltaflow_pub",
+    "publication.autocreate.mode": "disabled",
+
+    "snapshot.mode": "initial",
+    "tombstones.on.delete": "true",
+    "heartbeat.interval.ms": "10000",
+
+    "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "key.converter.schemas.enable": "false",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter.schemas.enable": "false"
+  }
+}
