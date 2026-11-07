@@ -65,3 +65,19 @@ def test_format_table_aligns_columns_and_handles_no_rows() -> None:
         "shipped  3 ",
     ]
     assert format_table([]) == "(no rows)"
+
+
+def test_sinks_have_their_own_dead_letter_topics_which_can_be_disabled() -> None:
+    parser = build_parser()
+
+    assert parser.parse_args(["run-es-sink"]).dlq_topic == "deltaflow.dlq.es"
+    assert parser.parse_args(["run-mongo-sink"]).dlq_topic == "deltaflow.dlq.mongo"
+    assert parser.parse_args(["run-es-sink", "--dlq-topic", ""]).dlq_topic == ""
+
+
+def test_dlq_command_takes_an_action_and_a_sink() -> None:
+    args = build_parser().parse_args(["dlq", "show", "es", "--max", "5"])
+
+    assert (args.action, args.sink, args.limit) == ("show", "es", 5)
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["dlq", "purge", "es"])

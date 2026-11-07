@@ -13,15 +13,16 @@ from collections.abc import Callable, Iterable, Sequence
 from typing import Any
 
 from elastic_transport import TransportError
-from elasticsearch import Elasticsearch, helpers
+from elasticsearch import ApiError, Elasticsearch, helpers
 
 from deltaflow.events import ChangeEvent
-from deltaflow.sinks.base import RetryableSinkError, SinkError
+from deltaflow.sinks.base import RetryableSinkError, SinkError, TruncateWatermarks
 
 log = logging.getLogger(__name__)
 
 INDEX_PREFIX = "deltaflow"
 TEMPLATE_NAME = "deltaflow"
+TRUNCATE_INDEX = f"{INDEX_PREFIX}-_truncates"  # one document per table: its truncate watermark
 
 _TEXT_WITH_KEYWORD = {"type": "text", "fields": {"keyword": {"type": "keyword"}}}
 _DATE = {"type": "date", "ignore_malformed": True}  # a bad timestamp must not poison the sink
@@ -103,12 +104,48 @@ class ElasticsearchSink:
         self._es = es
         self._prefix = prefix
         self._bulk = bulk
+        self._marks = TruncateWatermarks()
         self.applied = 0
         self.stale = 0
+        self.truncated = 0
+
+    def load_state(self) -> None:
+        """Read the persisted truncate watermarks (call once at start-up)."""
+        # A watermark written moments ago is invisible to search until a refresh.
+        self._es.indices.refresh(index=TRUNCATE_INDEX, ignore_unavailable=True)
+        response = self._es.search(
+            index=TRUNCATE_INDEX,
+            query={"match_all": {}},
+            size=10_000,
+            ignore_unavailable=True,
+        )
+        self._marks.load(
+            {hit["_id"]: int(hit["_source"]["lsn"]) for hit in response["hits"]["hits"]}
+        )
+        if len(self._marks):
+            log.info("loaded truncate watermarks for %d table(s)", len(self._marks))
 
     def write(self, events: Sequence[ChangeEvent]) -> None:
         if not events:
             return
+        try:
+            for event in events:
+                if event.is_truncate:
+                    self._truncate(event)
+        except TransportError as exc:
+            raise RetryableSinkError(f"elasticsearch unreachable: {exc}") from exc
+        except ApiError as exc:
+            kind = RetryableSinkError if exc.status_code in (429, 502, 503, 504) else SinkError
+            raise kind(f"truncate failed: {exc}") from exc
+
+        rows = [event for event in events if not event.is_truncate]
+        superseded = [event for event in rows if self._marks.superseded(event)]
+        if superseded:
+            self.stale += len(superseded)
+            rows = [event for event in rows if not self._marks.superseded(event)]
+        if not rows:
+            return
+        events = rows
         actions = [to_action(event, self._prefix) for event in events]
         try:
             _, errors = self._bulk(self._es, actions, raise_on_error=False, stats_only=False)
@@ -125,6 +162,40 @@ class ElasticsearchSink:
         if permanent:
             raise SinkError(f"{len(permanent)} bulk items rejected: {permanent[0]}")
         log.info("applied %d events (%d stale or duplicate skipped)", len(events) - stale, stale)
+
+    def _truncate(self, event: ChangeEvent) -> None:
+        """Wipe the table's index of everything older than the truncate, and remember it.
+
+        Idempotent and order independent: the watermark is stored first (external version, so
+        an older truncate cannot lower it), then documents with `cdc_lsn` below it are deleted.
+        Rows written after the truncate carry a higher LSN and survive, even if they were
+        indexed before this event was read.
+        """
+        try:
+            self._es.index(
+                index=TRUNCATE_INDEX,
+                id=event.table_name,
+                document={"table": event.table_name, "lsn": event.lsn},
+                version=event.lsn,
+                version_type="external",
+            )
+        except ApiError as exc:
+            if exc.status_code != 409:  # 409: an equal or newer truncate is already recorded
+                raise
+        self._marks.advance(event.table_name, event.lsn)
+        index = index_name(event.table_name, self._prefix)
+        # Recently indexed documents are invisible to search until a refresh; make them visible
+        # so the delete cannot miss them.
+        self._es.indices.refresh(index=index, ignore_unavailable=True)
+        self._es.delete_by_query(
+            index=index,
+            query={"range": {"cdc_lsn": {"lt": event.lsn}}},
+            conflicts="proceed",
+            ignore_unavailable=True,
+            refresh=True,
+        )
+        self.truncated += 1
+        log.warning("truncated %s at lsn %d", index, event.lsn)
 
     @staticmethod
     def _classify(errors: Iterable[dict[str, Any]]) -> tuple[int, list[Any], list[Any]]:

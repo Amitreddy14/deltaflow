@@ -17,7 +17,7 @@ from typing import Any
 
 import httpx
 
-from deltaflow import analytics, connect, loadgen, runners, tail, verify
+from deltaflow import analytics, connect, deadletter, loadgen, runners, tail, verify
 from deltaflow.config import get_settings
 
 
@@ -55,6 +55,11 @@ def build_parser() -> argparse.ArgumentParser:
         sink.add_argument("--group-id", default=default_group)
         sink.add_argument("--topic-pattern", default=settings.kafka_topic_pattern)
         sink.add_argument("--batch-size", type=int, default=200)
+        sink.add_argument(
+            "--dlq-topic",
+            default=deadletter.dlq_topic("es" if name == "run-es-sink" else "mongo"),
+            help="dead-letter topic; pass an empty string to stop on bad events instead",
+        )
         sink.add_argument("--bootstrap-servers", default=settings.kafka_bootstrap_servers)
         if name == "run-es-sink":
             sink.add_argument("--elasticsearch-url", default=settings.elasticsearch_url)
@@ -74,6 +79,12 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("--since-minutes", type=int, default=None, help="only recent history")
     report.add_argument("--mongo-url", default=settings.mongo_url)
     report.add_argument("--mongo-database", default=settings.mongo_database)
+
+    dlq = commands.add_parser("dlq", help="inspect or replay dead-lettered events")
+    dlq.add_argument("action", choices=("show", "replay"))
+    dlq.add_argument("sink", choices=("es", "mongo"))
+    dlq.add_argument("--max", type=int, default=20, dest="limit")
+    dlq.add_argument("--bootstrap-servers", default=settings.kafka_bootstrap_servers)
 
     check = commands.add_parser(
         "verify", help="compare row counts: Postgres vs Elasticsearch vs Mongo"
@@ -105,6 +116,7 @@ def _run_es_sink(args: argparse.Namespace) -> None:
         group_id=args.group_id,
         topic_pattern=args.topic_pattern,
         batch_size=args.batch_size,
+        dead_letter_topic=args.dlq_topic or None,
         stop=_stop_on_signal(),
     )
 
@@ -117,8 +129,36 @@ def _run_mongo_sink(args: argparse.Namespace) -> None:
         group_id=args.group_id,
         topic_pattern=args.topic_pattern,
         batch_size=args.batch_size,
+        dead_letter_topic=args.dlq_topic or None,
         stop=_stop_on_signal(),
     )
+
+
+def _dlq(args: argparse.Namespace) -> None:
+    import uuid
+
+    from confluent_kafka import Consumer, Producer
+
+    topic = deadletter.dlq_topic(args.sink)
+    consumer = Consumer(
+        {
+            "bootstrap.servers": args.bootstrap_servers,
+            "group.id": f"deltaflow-dlq-cli-{uuid.uuid4().hex[:8]}",  # never commits, never shared
+            "enable.auto.commit": False,
+        }
+    )
+    try:
+        limit = args.limit if args.action == "show" else None
+        letters = deadletter.read_dead_letters(consumer, topic, limit=limit)
+    finally:
+        consumer.close()
+    if args.action == "show":
+        print(format_table([letter.summary() for letter in letters]))
+        print(f"{len(letters)} dead letter(s) in {topic}")
+        return
+    producer = Producer({"bootstrap.servers": args.bootstrap_servers})
+    sent = deadletter.replay_dead_letters(producer, letters)
+    print(f"re-published {sent} dead letter(s) from {topic} to their source topics")
 
 
 def _search(args: argparse.Namespace) -> None:
@@ -239,6 +279,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             _run_es_sink(args)
         elif args.command == "run-mongo-sink":
             _run_mongo_sink(args)
+        elif args.command == "dlq":
+            _dlq(args)
         elif args.command == "search":
             _search(args)
         elif args.command == "analytics":

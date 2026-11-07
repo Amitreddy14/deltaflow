@@ -96,4 +96,4 @@ python -m pytest -m integration -v   # needs the stack; includes the Elasticsear
 | `es-sink` keeps restarting | `docker compose logs es-sink`. A mapping rejection (HTTP 400) is a permanent error by design; the log names the document and reason. |
 | Index is empty | The connector must be RUNNING (`deltaflow connector-status`) so topics exist. The sink finds topics automatically within about 5 seconds. |
 | Counts differ briefly | Elasticsearch refreshes about once per second, and the sink may be catching up. Wait a few seconds. |
-| `TRUNCATE` on a table halts the sink | Known limit until Phase 4 (dead-letter handling). |
+| `TRUNCATE` on a table halts the sink | Fixed in Phase 4 ([ADR-0010](adr/0010-reliability.md)). |

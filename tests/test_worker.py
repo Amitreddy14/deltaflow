@@ -1,4 +1,5 @@
 import threading
+import time
 from collections.abc import Sequence
 from typing import Any
 
@@ -199,3 +200,143 @@ def test_run_loops_until_stopped() -> None:
     _worker(consumer, sink).run(stop)
 
     assert len(sink.batches) == 2 and len(consumer.commits) == 2
+
+
+# ---- Phase 4: dead letters, isolation, shutdown -------------------------------------------
+
+
+class RecordingDlq:
+    def __init__(self, fail: bool = False) -> None:
+        self.letters: list[Any] = []
+        self.fail = fail
+
+    def send(self, letter: Any) -> None:
+        if self.fail:
+            raise RuntimeError("dlq down")
+        self.letters.append(letter)
+
+
+class PoisonSink:
+    """Rejects any batch that contains an event whose LSN is in `poison`."""
+
+    def __init__(self, poison: set[int]) -> None:
+        self.poison = poison
+        self.applied: list[int] = []
+        self.calls = 0
+
+    def write(self, events: Sequence[ChangeEvent]) -> None:
+        self.calls += 1
+        if any(e.lsn in self.poison for e in events):
+            raise SinkError("mapping conflict")
+        self.applied.extend(e.lsn for e in events)
+
+
+def test_unparseable_message_is_dead_lettered_and_the_rest_proceed() -> None:
+    consumer = FakeConsumer([Msg(1, b"garbage"), Msg(2, _value(lsn=7))])
+    sink, dlq = RecordingSink(), RecordingDlq()
+
+    handled = _worker(consumer, sink, dead_letters=dlq).run_once()
+
+    assert handled == 2 and len(sink.batches) == 1
+    (letter,) = dlq.letters
+    assert letter.stage == "parse" and letter.value == b"garbage" and letter.offset == 1
+    assert "not valid JSON" in letter.reason
+    assert [tp.offset for tp in consumer.commits[0]] == [3]  # both messages are done
+
+
+def test_poison_event_is_isolated_by_bisection_and_everything_else_is_applied() -> None:
+    consumer = FakeConsumer([Msg(i, _value(lsn=i + 100)) for i in range(8)])
+    sink, dlq = PoisonSink({105}), RecordingDlq()
+
+    _worker(consumer, sink, dead_letters=dlq).run_once()  # type: ignore[arg-type]
+
+    assert sorted(sink.applied) == [100, 101, 102, 103, 104, 106, 107]
+    (letter,) = dlq.letters
+    assert letter.stage == "sink" and letter.offset == 5 and "mapping conflict" in letter.reason
+    assert [tp.offset for tp in consumer.commits[0]] == [8]
+
+
+def test_without_a_dead_letter_queue_a_rejected_batch_still_halts_the_worker() -> None:
+    consumer = FakeConsumer([Msg(0, _value(lsn=1))])
+
+    with pytest.raises(SinkError):
+        _worker(consumer, PoisonSink({1})).run_once()  # type: ignore[arg-type]
+
+    assert consumer.commits == []
+
+
+def test_a_down_destination_is_never_dead_lettered() -> None:
+    consumer = FakeConsumer([Msg(0, _value())])
+    dlq = RecordingDlq()
+
+    with pytest.raises(RetryableSinkError):
+        _worker(
+            consumer,
+            RecordingSink([RetryableSinkError("down")] * 10),
+            max_retries=1,
+            dead_letters=dlq,
+        ).run_once()
+
+    assert dlq.letters == [] and consumer.commits == []
+
+
+def test_a_flood_of_dead_letters_stops_the_worker() -> None:
+    """If everything is rejected the sink is broken, not the data; do not quarantine it all."""
+    consumer = FakeConsumer([Msg(i, _value(lsn=i + 1)) for i in range(10)])
+    sink, dlq = PoisonSink(set(range(1, 11))), RecordingDlq()
+
+    with pytest.raises(WorkerError, match="consecutive dead letters"):
+        _worker(consumer, sink, dead_letters=dlq, max_consecutive_dead_letters=3).run_once()  # type: ignore[arg-type]
+
+    assert len(dlq.letters) == 4 and consumer.commits == []
+
+
+def test_a_good_write_resets_the_dead_letter_streak() -> None:
+    batches = [[Msg(0, _value(lsn=1))], [Msg(1, _value(lsn=2))], [Msg(2, _value(lsn=3))]]
+    consumer = FakeConsumer(*batches)
+    sink, dlq = PoisonSink({1, 3}), RecordingDlq()
+    worker = _worker(consumer, sink, dead_letters=dlq, max_consecutive_dead_letters=1)  # type: ignore[arg-type]
+
+    for _ in batches:
+        worker.run_once()  # 1 bad, 1 good, 1 bad: never two in a row
+
+    assert len(dlq.letters) == 2 and sink.applied == [2]
+
+
+def test_if_the_dead_letter_cannot_be_stored_nothing_is_committed() -> None:
+    consumer = FakeConsumer([Msg(1, b"garbage")])
+
+    with pytest.raises(RuntimeError, match="dlq down"):
+        _worker(consumer, RecordingSink(), dead_letters=RecordingDlq(fail=True)).run_once()
+
+    assert consumer.commits == []  # the message is not lost: it will be read again
+
+
+def test_shutdown_during_a_retry_abandons_the_batch_uncommitted() -> None:
+    stop = threading.Event()
+    consumer = FakeConsumer([Msg(5, _value())])
+    sink = RecordingSink([RetryableSinkError("down")] * 10)
+    worker = SinkWorker(consumer, sink, backoff_base=30.0, max_retries=5)  # would wait 30 s
+
+    threading.Timer(0.2, stop.set).start()
+    begin = time.monotonic()
+    worker.run(stop)  # returns cleanly instead of raising
+
+    assert time.monotonic() - begin < 5 and consumer.commits == []
+
+
+def test_shutdown_lets_the_batch_in_flight_finish_and_commit() -> None:
+    stop = threading.Event()
+    consumer = FakeConsumer([Msg(0, _value())], [Msg(1, _value())])
+    sink = RecordingSink()
+    original = sink.write
+
+    def write_and_request_stop(events: Sequence[ChangeEvent]) -> None:
+        stop.set()  # arrives mid-batch
+        original(events)
+
+    sink.write = write_and_request_stop  # type: ignore[method-assign]
+
+    _worker(consumer, sink).run(stop)
+
+    assert len(sink.batches) == 1 and len(consumer.commits) == 1  # finished, committed, exited

@@ -97,7 +97,7 @@ Net result: effectively-once visible state, with simple and testable code.
 |---|---|
 | Sink worker crashes mid-batch | Uncommitted offsets are re-read on restart; the LSN guard makes re-application a no-op. |
 | Elasticsearch or MongoDB down | Worker retries with exponential backoff and pauses consumption. Kafka retains events, so lag grows and then drains. |
-| Poison event (cannot be transformed or is rejected permanently) | Retried a bounded number of times, then published to a dead-letter topic with the error attached; the partition keeps moving. |
+| Poison event (cannot be transformed or is rejected permanently) | Published to a per-sink dead-letter topic with the error attached (the bad event is found by bisecting the batch); the partition keeps moving. Transient failures are retried, never dead-lettered. See ADR-0010. |
 | Kafka Connect crashes | Connector offsets live in Kafka; Debezium resumes from its last committed LSN. The replication slot retains WAL meanwhile. |
 | Connector stopped for a long time | The replication slot makes Postgres retain WAL, which can fill the disk. Mitigation: slot-lag monitoring and `max_slot_wal_keep_size`, covered in the operations phase. |
 | Schema change on source | Debezium schema history picks up new columns; sinks tolerate additive changes (Elasticsearch dynamic mapping, schemaless Mongo). Breaking changes go to the dead-letter topic. |

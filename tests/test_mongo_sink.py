@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
-from pymongo.errors import BulkWriteError, ConnectionFailure
+from pymongo.errors import BulkWriteError, ConnectionFailure, DuplicateKeyError
 
 from deltaflow.events import ChangeEvent, Op
 from deltaflow.sinks import mongo
@@ -44,6 +44,30 @@ class FakeCollection:
                 errors.append({"index": index, "code": self.write_error_code, "errmsg": "dup"})
         if errors:
             raise BulkWriteError({"writeErrors": errors})
+
+    def update_one(
+        self, filt: dict[str, Any], update: dict[str, Any], upsert: bool = False
+    ) -> None:
+        existing = self.docs.get(filt["_id"])
+        if existing is not None and not existing["lsn"] < filt["lsn"]["$lt"]:
+            raise DuplicateKeyError("dup")  # guard rejected; upsert tried to insert again
+        self.docs[filt["_id"]] = {"_id": filt["_id"], **update["$set"]}
+
+    def update_many(self, filt: dict[str, Any], update: dict[str, Any]) -> Any:
+        limit = filt["_lsn"]["$lt"]
+        hit = [
+            d for d in self.docs.values() if d["_deleted"] is filt["_deleted"] and d["_lsn"] < limit
+        ]
+        for doc in hit:
+            doc.update(update["$set"])
+
+        class Result:
+            modified_count = len(hit)
+
+        return Result()
+
+    def find(self) -> list[dict[str, Any]]:
+        return list(self.docs.values())
 
     def insert_many(self, documents: list[dict[str, Any]], ordered: bool = True) -> None:
         errors = []
@@ -253,3 +277,76 @@ def test_empty_batch_is_a_no_op() -> None:
     sink.write([])
 
     assert db.collections == {}
+
+
+# ---- TRUNCATE (ADR-0010) -------------------------------------------------------------------
+
+
+def _truncate(lsn: int) -> ChangeEvent:
+    return ChangeEvent(
+        op=Op.TRUNCATE,
+        table="public.customers",
+        key={},
+        before=None,
+        after=None,
+        lsn=lsn,
+        ts_ms=1_700_000_000_000,
+    )
+
+
+def test_truncate_tombstones_older_rows_and_keeps_newer_ones() -> None:
+    sink, db = _sink()
+    sink.write([_event(Op.CREATE, 100, key={"id": 1}, after={"id": 1, "city": "A"})])
+    sink.write([_event(Op.CREATE, 900, key={"id": 2}, after={"id": 2, "city": "B"})])
+
+    sink.write([_truncate(500)])
+
+    rows = db["customers"].docs
+    assert rows[1]["_deleted"] is True and rows[1]["_lsn"] == 500 and rows[1]["_op"] == "t"
+    assert rows[1]["_deleted_at"] == NOW and rows[1]["city"] == "A"
+    assert rows[2]["_deleted"] is False  # written after the truncate: untouched
+    assert db[mongo.TRUNCATE_COLLECTION].docs["customers"]["lsn"] == 500
+    assert sink.truncated == 1
+
+
+def test_truncate_is_recorded_in_history_with_a_wildcard_id() -> None:
+    sink, db = _sink()
+
+    sink.write([_truncate(500)])
+
+    (entry,) = db[mongo.HISTORY_COLLECTION].docs.values()
+    assert entry["op"] == "t" and entry["doc_id"] == "*" and entry["changed"] == []
+
+
+def test_older_rows_arriving_after_a_truncate_cannot_resurrect_anything() -> None:
+    sink, db = _sink()
+    sink.write([_truncate(500)])
+
+    sink.write([_event(Op.CREATE, 400, key={"id": 3}, after={"id": 3, "city": "C"})])
+
+    assert 3 not in db["customers"].docs  # never written into the state collection
+    assert sink.stale == 1
+    assert len(db[mongo.HISTORY_COLLECTION].docs) == 2  # but the history still records it
+
+
+def test_replaying_a_truncate_is_harmless() -> None:
+    sink, db = _sink()
+    sink.write([_event(Op.CREATE, 100, key={"id": 1}, after={"id": 1, "city": "A"})])
+
+    sink.write([_truncate(500)])
+    sink.write([_truncate(500)])  # same event again (redelivery or replay)
+    sink.write([_truncate(300)])  # an older truncate must not lower the watermark
+
+    assert db[mongo.TRUNCATE_COLLECTION].docs["customers"]["lsn"] == 500
+    assert db["customers"].docs[1]["_lsn"] == 500
+
+
+def test_watermarks_are_loaded_back_after_a_restart() -> None:
+    sink, db = _sink()
+    sink.write([_truncate(500)])
+
+    restarted = mongo.MongoSink(db, clock=lambda: NOW)  # type: ignore[arg-type]
+    restarted.load_state()
+    restarted.write([_event(Op.CREATE, 400, key={"id": 4}, after={"id": 4, "city": "D"})])
+
+    assert 4 not in db["customers"].docs

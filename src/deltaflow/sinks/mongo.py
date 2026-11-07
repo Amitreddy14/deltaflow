@@ -17,6 +17,7 @@ signal "a newer or identical version is already stored".
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
@@ -24,14 +25,15 @@ from typing import Any
 
 from pymongo import ReplaceOne
 from pymongo.database import Database
-from pymongo.errors import BulkWriteError, ConnectionFailure
+from pymongo.errors import BulkWriteError, ConnectionFailure, DuplicateKeyError
 
 from deltaflow.events import ChangeEvent
-from deltaflow.sinks.base import RetryableSinkError, SinkError
+from deltaflow.sinks.base import RetryableSinkError, SinkError, TruncateWatermarks
 
 log = logging.getLogger(__name__)
 
 HISTORY_COLLECTION = "changes"
+TRUNCATE_COLLECTION = "_truncates"  # one document per table: its truncate watermark
 DUPLICATE_KEY = 11000
 TOMBSTONE_TTL_SECONDS = 7 * 24 * 3600
 
@@ -122,10 +124,18 @@ class MongoSink:
         self._db = db
         self._clock = clock
         self._indexed: set[str] = set()
+        self._marks = TruncateWatermarks()
+        self.truncated = 0
         self.applied = 0
         self.stale = 0
         self.history_written = 0
         self.history_duplicates = 0
+
+    def load_state(self) -> None:
+        """Read the persisted truncate watermarks (call once at start-up)."""
+        self._marks.load({d["_id"]: int(d["lsn"]) for d in self._db[TRUNCATE_COLLECTION].find()})
+        if len(self._marks):
+            log.info("loaded truncate watermarks for %d table(s)", len(self._marks))
 
     def write(self, events: Sequence[ChangeEvent]) -> None:
         if not events:
@@ -133,7 +143,10 @@ class MongoSink:
         try:
             self._ensure_indexes(events)
             self._write_history(events)
-            self._write_state(events)
+            for event in events:
+                if event.is_truncate:
+                    self._truncate(event)
+            self._write_state([e for e in events if not e.is_truncate])
         except ConnectionFailure as exc:  # includes server-selection timeouts and failovers
             raise RetryableSinkError(f"mongodb unreachable: {exc}") from exc
         log.info("applied %d events (%d stale or duplicate skipped)", len(events), self.stale)
@@ -153,10 +166,46 @@ class MongoSink:
             self.history_duplicates += duplicates
             self.history_written += len(documents) - duplicates
 
+    def _truncate(self, event: ChangeEvent) -> None:
+        """Soft-delete every row older than the truncate and record the watermark.
+
+        Rows are tombstoned (not removed) for the same reason deletes are: it keeps writes
+        commutative and the TTL purges them later. Their `_lsn` is raised to the truncate's, so
+        an older event for the same row is rejected by the normal guard.
+        """
+        with contextlib.suppress(DuplicateKeyError):  # an equal or newer truncate is recorded
+            self._db[TRUNCATE_COLLECTION].update_one(
+                {"_id": event.table_name, "lsn": {"$lt": event.lsn}},
+                {"$set": {"lsn": event.lsn, "ts": _utc(event.ts_ms)}},
+                upsert=True,
+            )
+        self._marks.advance(event.table_name, event.lsn)
+        result = self._db[event.table_name].update_many(
+            {"_deleted": False, "_lsn": {"$lt": event.lsn}},
+            {
+                "$set": {
+                    "_deleted": True,
+                    "_deleted_at": self._clock(),
+                    "_lsn": event.lsn,
+                    "_op": event.op.value,
+                }
+            },
+        )
+        self.truncated += 1
+        log.warning(
+            "truncated %s at lsn %d (%d rows tombstoned)",
+            event.table_name,
+            event.lsn,
+            result.modified_count,
+        )
+
     def _write_state(self, events: Sequence[ChangeEvent]) -> None:
         now = self._clock()
         by_table: dict[str, list[ReplaceOne[dict[str, Any]]]] = {}
         for event in events:
+            if self._marks.superseded(event):
+                self.stale += 1  # older than a truncate: as if applied, then wiped
+                continue
             by_table.setdefault(event.table_name, []).append(state_operation(event, now))
         for table_name, operations in by_table.items():
             try:

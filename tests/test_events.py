@@ -68,7 +68,7 @@ def test_tombstone_and_heartbeat_are_not_changes() -> None:
     [
         (KEY, b"not json", "not valid JSON"),
         (KEY, b"[1, 2]", "not a JSON object"),
-        (KEY, _value("t", None, None), "unsupported operation"),
+        (KEY, _value("x", None, None), "unsupported operation"),
         (None, _value("c", None, {"id": 7}), "no key"),
         (b"[]", _value("c", None, {"id": 7}), "key is not"),
         (KEY, _value("c", None, {"id": 7}, lsn=None), "missing schema, table or lsn"),
@@ -82,3 +82,18 @@ def test_malformed_messages_raise_instead_of_being_dropped(
 ) -> None:
     with pytest.raises(EventParseError, match=message):
         parse_change_event(key, value)
+
+
+def test_truncate_is_a_keyless_table_level_event() -> None:
+    event = parse_change_event(None, _value("t", None, None, lsn=900))
+
+    assert event is not None
+    assert event.is_truncate and event.table_name == "orders" and event.lsn == 900
+    assert event.key == {} and event.before is None and event.after is None
+    assert event.doc_id == "*"  # concerns the whole table, not one row
+
+
+def test_truncate_ignores_any_row_images() -> None:
+    event = parse_change_event(None, _value("t", {"id": 1}, {"id": 1}))
+
+    assert event is not None and event.before is None and event.after is None
