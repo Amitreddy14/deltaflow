@@ -7,7 +7,7 @@ or events are replayed.
 
 [![CI](https://github.com/Amitreddy14/deltaflow/actions/workflows/ci.yml/badge.svg)](https://github.com/Amitreddy14/deltaflow/actions/workflows/ci.yml)
 
-> **Status:** Phase 3 complete: row changes flow from Postgres through Kafka into Elasticsearch (search) and MongoDB (current state, history, analytics), with replay-safe writes. See the [roadmap](docs/ROADMAP.md).
+> **Status:** Phase 4 complete: row changes flow from Postgres through Kafka into Elasticsearch (search) and MongoDB (current state, history, analytics) with replay-safe writes, dead-letter quarantine for poison events, TRUNCATE support and clean shutdown. See the [roadmap](docs/ROADMAP.md).
 
 ## Architecture
 
@@ -79,6 +79,18 @@ deltaflow analytics transitions
 
 Collections, reports, failure demos and troubleshooting:
 [docs/phase-3-mongo-sink.md](docs/phase-3-mongo-sink.md).
+
+### Reliability: dead letters, TRUNCATE, clean shutdown (Phase 4)
+
+```bash
+docker compose up -d --wait --build
+deltaflow register-connector      # re-apply so TRUNCATE is captured
+deltaflow dlq show es             # quarantined events, with the reason
+deltaflow dlq replay es           # re-publish them once the cause is fixed
+```
+
+Demos (poison message, truncate and restore, graceful stop) and troubleshooting:
+[docs/phase-4-reliability.md](docs/phase-4-reliability.md).
 
 Optional Kafka browser UI: `docker compose --profile tools up -d` then open http://localhost:8080.
 

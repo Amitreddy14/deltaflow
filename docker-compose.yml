@@ -146,6 +146,7 @@ services:
     image: deltaflow:local
     command: ["deltaflow", "run-es-sink"]
     restart: unless-stopped
+    stop_grace_period: 30s # SIGTERM lets the worker finish and commit its batch
     depends_on:
       kafka:
         condition: service_healthy
@@ -164,6 +165,7 @@ services:
     image: deltaflow:local
     command: ["deltaflow", "run-mongo-sink"]
     restart: unless-stopped
+    stop_grace_period: 30s # SIGTERM lets the worker finish and commit its batch
     depends_on:
       kafka:
         condition: service_healthy

@@ -2,6 +2,12 @@
 
 Offsets are committed only after the sink has durably applied the batch. A crash anywhere
 before that point causes redelivery, never loss; idempotent sinks make redelivery harmless.
+
+With a dead-letter queue configured (ADR-0010), a message that can never succeed (unparseable,
+or permanently rejected by the sink) is quarantined and the pipeline moves on. Transient
+failures are never dead-lettered: they are retried and, if the destination stays down, stop the
+worker. A burst of consecutive dead letters also stops it, because that points at a broken sink
+rather than bad data.
 """
 
 from __future__ import annotations
@@ -14,8 +20,9 @@ from typing import Any, Literal, Protocol
 
 from confluent_kafka import TopicPartition
 
-from deltaflow.events import ChangeEvent, parse_change_event
-from deltaflow.sinks.base import RetryableSinkError, Sink
+from deltaflow.deadletter import DeadLetter, DeadLetterQueue
+from deltaflow.events import ChangeEvent, EventParseError, parse_change_event
+from deltaflow.sinks.base import RetryableSinkError, Sink, SinkError
 
 log = logging.getLogger(__name__)
 
@@ -27,7 +34,11 @@ ParseFn = Callable[..., ChangeEvent | None]
 
 
 class WorkerError(RuntimeError):
-    """The Kafka consumer reported an unrecoverable error."""
+    """The worker cannot continue safely (consumer failure, or a flood of dead letters)."""
+
+
+class _ShutdownRequested(Exception):
+    """Stop was requested while a batch was still being retried; it will be redelivered."""
 
 
 class ConsumerLike(Protocol):
@@ -49,7 +60,9 @@ class SinkWorker:
         backoff_base: float = 0.5,
         backoff_max: float = 10.0,
         parse: ParseFn = parse_change_event,
-        sleep: Callable[[float], None] = time.sleep,
+        sleep: Callable[[float], None] | None = None,
+        dead_letters: DeadLetterQueue | None = None,
+        max_consecutive_dead_letters: int = 50,
     ) -> None:
         self._consumer = consumer
         self._sink = sink
@@ -60,6 +73,11 @@ class SinkWorker:
         self._backoff_max = backoff_max
         self._parse = parse
         self._sleep = sleep
+        self._dead_letters = dead_letters
+        self._max_consecutive = max_consecutive_dead_letters
+        self._consecutive_dead = 0
+        self._stop: threading.Event | None = None
+        self.dead_lettered = 0
 
     def run_once(self) -> int:
         """Process one batch. Returns the number of Kafka messages handled (0 if idle)."""
@@ -74,27 +92,88 @@ class SinkWorker:
         if not usable:
             return 0
 
-        events: list[ChangeEvent] = []
+        pairs: list[tuple[Any, ChangeEvent]] = []
         for message in usable:
-            event = self._parse(
-                message.key(),
-                message.value(),
-                topic=message.topic(),
-                partition=message.partition(),
-                offset=message.offset(),
-            )
+            try:
+                event = self._parse(
+                    message.key(),
+                    message.value(),
+                    topic=message.topic(),
+                    partition=message.partition(),
+                    offset=message.offset(),
+                )
+            except EventParseError as exc:
+                if self._dead_letters is None:
+                    raise
+                self._dead_letter(message, "parse", str(exc))
+                continue
             if event is not None:
-                events.append(event)
+                pairs.append((message, event))
 
-        if events:
-            self._write_with_retry(events)
-        self._commit(usable)  # only reached once the sink acknowledged everything
+        if pairs:
+            self._write_isolating(pairs)
+        self._commit(usable)  # only reached once every message is applied or dead-lettered
         return len(usable)
 
     def run(self, stop: threading.Event) -> None:
-        """Loop until `stop` is set. Exceptions propagate: the process should crash and restart."""
-        while not stop.is_set():
-            self.run_once()
+        """Loop until `stop` is set, finishing (and committing) the batch in flight first.
+
+        If stop arrives while a batch is waiting out a retry, the batch is abandoned
+        uncommitted: Kafka redelivers it after restart and idempotent sinks make that harmless.
+        Other exceptions propagate: the process should crash and be restarted.
+        """
+        self._stop = stop
+        try:
+            while not stop.is_set():
+                self.run_once()
+        except _ShutdownRequested:
+            log.info("shutdown requested during a retry; the open batch will be redelivered")
+        finally:
+            self._stop = None
+
+    def _write_isolating(self, pairs: Sequence[tuple[Any, ChangeEvent]]) -> None:
+        """Write the batch; if the sink permanently rejects it, bisect to find the bad event(s).
+
+        Re-writing a good half is safe because sinks are idempotent. Each bad event ends up
+        alone in a batch of one and is dead-lettered; everything else is applied.
+        """
+        try:
+            self._write_with_retry([event for _, event in pairs])
+        except RetryableSinkError:
+            raise  # the destination is down, not the data: never quarantine because of that
+        except SinkError as exc:
+            if self._dead_letters is None:
+                raise
+            if len(pairs) == 1:
+                self._dead_letter(pairs[0][0], "sink", str(exc))
+                return
+            log.warning("batch of %d rejected (%s); isolating the bad event(s)", len(pairs), exc)
+            middle = len(pairs) // 2
+            self._write_isolating(pairs[:middle])
+            self._write_isolating(pairs[middle:])
+        else:
+            self._consecutive_dead = 0
+
+    def _dead_letter(self, message: Any, stage: str, reason: str) -> None:
+        assert self._dead_letters is not None
+        self._dead_letters.send(
+            DeadLetter(
+                topic=message.topic(),
+                partition=message.partition(),
+                offset=message.offset(),
+                key=message.key(),
+                value=message.value(),
+                reason=reason,
+                stage=stage,
+            )
+        )
+        self.dead_lettered += 1
+        self._consecutive_dead += 1
+        if self._consecutive_dead > self._max_consecutive:
+            raise WorkerError(
+                f"{self._consecutive_dead} consecutive dead letters: the sink looks broken, "
+                "not the data. Stopping instead of quarantining everything."
+            )
 
     def _write_with_retry(self, events: Sequence[ChangeEvent]) -> None:
         for attempt in range(self._max_retries + 1):
@@ -106,7 +185,20 @@ class SinkWorker:
                     raise
                 delay = min(self._backoff_max, self._backoff_base * 2**attempt)
                 log.warning("sink unavailable (%s); retry %d in %.1fs", exc, attempt + 1, delay)
-                self._sleep(delay)
+                self._pause(delay)
+
+    def _pause(self, delay: float) -> None:
+        if self._sleep is not None:
+            self._sleep(delay)
+        elif self._stop is not None:
+            self._stop.wait(delay)  # wakes immediately when shutdown is requested
+        else:
+            time.sleep(delay)
+        self._check_stop()
+
+    def _check_stop(self) -> None:
+        if self._stop is not None and self._stop.is_set():
+            raise _ShutdownRequested
 
     def _commit(self, messages: Sequence[Any]) -> None:
         """Commit the next offset to read for every partition touched by this batch."""

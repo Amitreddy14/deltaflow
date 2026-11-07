@@ -24,6 +24,7 @@
 
     "snapshot.mode": "initial",
     "tombstones.on.delete": "true",
+    "skipped.operations": "none",
     "heartbeat.interval.ms": "10000",
 
     "key.converter": "org.apache.kafka.connect.json.JsonConverter",

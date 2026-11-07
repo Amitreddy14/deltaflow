@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Protocol
 
 from deltaflow.events import ChangeEvent
@@ -24,3 +24,30 @@ class Sink(Protocol):
         superseded by newer data. Raises SinkError (or RetryableSinkError) otherwise.
         """
         ...
+
+
+class TruncateWatermarks:
+    """Per-table "nothing older than this LSN may exist" marks, set by TRUNCATE events.
+
+    A TRUNCATE has no row key, so Kafka may place it in a different partition than the row
+    events before it. After a replay or restart an older row event can therefore be read
+    *after* the truncate. The mark makes the outcome independent of that arrival order: any
+    row event older than the table's truncate is superseded, exactly as if it had been applied
+    and then wiped.
+    """
+
+    def __init__(self) -> None:
+        self._marks: dict[str, int] = {}
+
+    def load(self, marks: Mapping[str, int]) -> None:
+        for table, lsn in marks.items():
+            self.advance(table, lsn)
+
+    def advance(self, table: str, lsn: int) -> None:
+        self._marks[table] = max(self._marks.get(table, 0), lsn)
+
+    def superseded(self, event: ChangeEvent) -> bool:
+        return event.lsn < self._marks.get(event.table_name, 0)
+
+    def __len__(self) -> int:
+        return len(self._marks)

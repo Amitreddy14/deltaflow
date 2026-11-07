@@ -135,3 +135,142 @@ def test_template_installs_single_node_friendly_settings() -> None:
     assert settings["index.gc_deletes"] == "10m"
     props = call["template"]["mappings"]["properties"]
     assert props["status"]["type"] == "keyword" and props["created_at"]["ignore_malformed"] is True
+
+
+# ---- TRUNCATE (ADR-0010) -------------------------------------------------------------------
+
+
+class FakeIndices:
+    def __init__(self, log: list[str]) -> None:
+        self.log = log
+
+    def refresh(self, **kwargs: Any) -> None:
+        self.log.append("refresh")
+
+
+class FakeEs:
+    """Records the calls a truncate makes, in order."""
+
+    def __init__(self, *, hits: list[dict[str, Any]] | None = None) -> None:
+        self.log: list[str] = []
+        self.calls: dict[str, dict[str, Any]] = {}
+        self.indices = FakeIndices(self.log)
+        self.hits = hits or []
+        self.index_error: Exception | None = None
+        self.delete_error: Exception | None = None
+
+    def index(self, **kwargs: Any) -> None:
+        self.log.append("index")
+        self.calls["index"] = kwargs
+        if self.index_error:
+            raise self.index_error
+
+    def delete_by_query(self, **kwargs: Any) -> None:
+        self.log.append("delete_by_query")
+        self.calls["delete_by_query"] = kwargs
+        if self.delete_error:
+            raise self.delete_error
+
+    def search(self, **kwargs: Any) -> Any:
+        return {"hits": {"hits": self.hits}}
+
+
+def _truncate_event(lsn: int = 500) -> ChangeEvent:
+    return ChangeEvent(
+        op=Op.TRUNCATE, table="public.orders", key={}, before=None, after=None, lsn=lsn, ts_ms=1
+    )
+
+
+def _es_sink(es: FakeEs, bulk: FakeBulk) -> es_sink.ElasticsearchSink:
+    return es_sink.ElasticsearchSink(es, bulk=bulk)  # type: ignore[arg-type]
+
+
+def test_truncate_records_the_watermark_then_deletes_only_older_documents() -> None:
+    es, bulk = FakeEs(), FakeBulk()
+
+    _es_sink(es, bulk).write([_truncate_event(500)])
+
+    assert es.log == ["index", "refresh", "delete_by_query"]  # mark first, make visible, delete
+    assert es.calls["index"]["version"] == 500 and es.calls["index"]["version_type"] == "external"
+    assert es.calls["index"]["id"] == "orders"
+    delete = es.calls["delete_by_query"]
+    assert delete["index"] == "deltaflow-orders"
+    assert delete["query"] == {"range": {"cdc_lsn": {"lt": 500}}}  # newer rows survive
+    assert delete["conflicts"] == "proceed" and delete["ignore_unavailable"] is True
+    assert bulk.calls == []  # a truncate is not a bulk action
+
+
+def test_rows_older_than_a_truncate_are_superseded_whatever_the_arrival_order() -> None:
+    es, bulk = FakeEs(), FakeBulk()
+    sink = _es_sink(es, bulk)
+
+    sink.write([_truncate_event(500)])
+    sink.write([_event(Op.CREATE, lsn=400), _event(Op.UPDATE, lsn=600)])
+
+    (actions,) = bulk.calls
+    assert [a["_version"] for a in actions] == [600]  # the pre-truncate event never reaches ES
+    assert sink.stale == 1 and sink.truncated == 1
+
+
+def test_truncate_and_older_rows_in_one_batch_resolve_the_same_way() -> None:
+    es, bulk = FakeEs(), FakeBulk()
+    sink = _es_sink(es, bulk)
+
+    sink.write([_event(Op.CREATE, lsn=100), _truncate_event(500), _event(Op.CREATE, lsn=700)])
+
+    (actions,) = bulk.calls
+    assert [a["_version"] for a in actions] == [700]
+
+
+def test_watermarks_survive_a_restart() -> None:
+    es = FakeEs(hits=[{"_id": "orders", "_source": {"lsn": 500}}])
+    bulk = FakeBulk()
+    sink = _es_sink(es, bulk)
+
+    sink.load_state()
+    sink.write([_event(Op.CREATE, lsn=499)])
+
+    assert es.log == ["refresh"]  # watermarks written moments ago must be made searchable first
+    assert bulk.calls == [] and sink.stale == 1
+
+
+def test_an_already_recorded_newer_truncate_is_not_an_error() -> None:
+    from elasticsearch import ApiError
+
+    es = FakeEs()
+    es.index_error = ApiError("conflict", _meta(409), {})
+
+    _es_sink(es, FakeBulk()).write([_truncate_event(500)])
+
+    assert "delete_by_query" in es.log  # still cleans up; the delete is idempotent
+
+
+def _meta(status: int) -> Any:
+    from elastic_transport import ApiResponseMeta, HttpHeaders, NodeConfig
+
+    return ApiResponseMeta(
+        status=status,
+        http_version="1.1",
+        headers=HttpHeaders(),
+        duration=0.0,
+        node=NodeConfig("http", "x", 9200),
+    )
+
+
+def test_truncate_failures_are_classified() -> None:
+    from elasticsearch import ApiError
+
+    down = FakeEs()
+    down.delete_error = EsConnectionError("refused")
+    with pytest.raises(RetryableSinkError):
+        _es_sink(down, FakeBulk()).write([_truncate_event()])
+
+    busy = FakeEs()
+    busy.delete_error = ApiError("busy", _meta(429), {})
+    with pytest.raises(RetryableSinkError):
+        _es_sink(busy, FakeBulk()).write([_truncate_event()])
+
+    bad = FakeEs()
+    bad.delete_error = ApiError("bad", _meta(400), {})
+    with pytest.raises(SinkError):
+        _es_sink(bad, FakeBulk()).write([_truncate_event()])

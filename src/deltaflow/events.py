@@ -18,6 +18,7 @@ class Op(StrEnum):
     UPDATE = "u"
     DELETE = "d"
     READ = "r"  # initial snapshot row
+    TRUNCATE = "t"  # table emptied; carries no row and no key (ADR-0010)
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,12 +46,21 @@ class ChangeEvent:
 
     @property
     def doc_id(self) -> str:
-        """Stable document id derived from the primary key (sorted, '|' for composite keys)."""
+        """Stable document id derived from the primary key (sorted, '|' for composite keys).
+
+        A TRUNCATE concerns the whole table, so its id is the wildcard "*".
+        """
+        if self.is_truncate:
+            return "*"
         return "|".join(str(self.key[name]) for name in sorted(self.key))
 
     @property
     def is_delete(self) -> bool:
         return self.op is Op.DELETE
+
+    @property
+    def is_truncate(self) -> bool:
+        return self.op is Op.TRUNCATE
 
 
 def _load_json(raw: bytes, what: str) -> Any:
@@ -72,8 +82,8 @@ def parse_change_event(
 
     Returns None for messages that are legitimately not changes: the null-valued tombstone
     Kafka receives after every delete, and Debezium heartbeats. Anything else that cannot be
-    understood (including TRUNCATE, which has no row key) raises EventParseError, so it is
-    visible instead of silently skipped. Phase 4 routes these to a dead-letter topic.
+    understood raises EventParseError, so it is visible instead of silently skipped; the
+    worker routes those to the dead-letter topic. A TRUNCATE is a valid event with no key.
     """
     if value is None:
         return None  # tombstone
@@ -89,11 +99,13 @@ def parse_change_event(
     except ValueError as exc:
         raise EventParseError(f"unsupported operation {payload['op']!r}") from exc
 
-    if key is None:
-        raise EventParseError("message has no key")
-    key_doc = _load_json(key, "key")
-    if not isinstance(key_doc, dict) or not key_doc:
-        raise EventParseError("key is not a non-empty JSON object")
+    key_doc: Any = {}
+    if op is not Op.TRUNCATE:
+        if key is None:
+            raise EventParseError("message has no key")
+        key_doc = _load_json(key, "key")
+        if not isinstance(key_doc, dict) or not key_doc:
+            raise EventParseError("key is not a non-empty JSON object")
 
     source = payload.get("source")
     if not isinstance(source, dict):
@@ -108,9 +120,11 @@ def parse_change_event(
     for name, row in (("before", before), ("after", after)):
         if row is not None and not isinstance(row, dict):
             raise EventParseError(f"{name} image is not a JSON object")
-    if op is Op.DELETE and before is None:
+    if op is Op.TRUNCATE:
+        before = after = None
+    elif op is Op.DELETE and before is None:
         raise EventParseError("delete event has no before image (is REPLICA IDENTITY FULL set?)")
-    if op is not Op.DELETE and after is None:
+    elif op is not Op.DELETE and after is None:
         raise EventParseError(f"{op.name.lower()} event has no after image")
 
     ts_ms = payload.get("ts_ms") or source.get("ts_ms") or 0
