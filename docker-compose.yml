@@ -126,6 +126,7 @@ services:
 
   api:
     build: .
+    image: deltaflow:local
     depends_on:
       kafka:
         condition: service_healthy
@@ -137,6 +138,25 @@ services:
       DELTAFLOW_MONGO_URL: mongodb://mongodb:27017
     ports:
       - "127.0.0.1:${API_HOST_PORT:-8000}:8000"
+
+  # Streams change events into Elasticsearch. Same image as the API, different command.
+  # Restarts automatically: after a crash it resumes from its last committed Kafka offset.
+  es-sink:
+    build: .
+    image: deltaflow:local
+    command: ["deltaflow", "run-es-sink"]
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    environment:
+      DELTAFLOW_ENVIRONMENT: docker
+      DELTAFLOW_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      DELTAFLOW_ELASTICSEARCH_URL: http://elasticsearch:9200
+    healthcheck:
+      disable: true # the image's HTTP healthcheck belongs to the API; this process has no port
 
   # Optional UI for browsing topics and messages: docker compose --profile tools up -d
   kafka-ui:

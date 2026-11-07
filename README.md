@@ -7,7 +7,7 @@ or events are replayed.
 
 [![CI](https://github.com/Amitreddy14/deltaflow/actions/workflows/ci.yml/badge.svg)](https://github.com/Amitreddy14/deltaflow/actions/workflows/ci.yml)
 
-> **Status:** Phase 1 (capture) complete: row changes flow from Postgres to Kafka. Sinks arrive in Phases 2 and 3. See the [roadmap](docs/ROADMAP.md).
+> **Status:** Phase 2 complete: row changes flow from Postgres through Kafka into Elasticsearch, with replay-safe writes. MongoDB arrives in Phase 3. See the [roadmap](docs/ROADMAP.md).
 
 ## Architecture
 
@@ -55,6 +55,17 @@ deltaflow loadgen --rate 5 --duration 30        # terminal 2: random inserts, up
 
 Details, expected output and troubleshooting: [docs/phase-1-capture.md](docs/phase-1-capture.md).
 If you ran the stack before Phase 1, reset it once with `docker compose down -v`.
+
+### Search the data in Elasticsearch (Phase 2)
+
+```bash
+docker compose up -d --wait --build          # also starts the es-sink worker
+deltaflow search customers "Reddy"
+deltaflow search orders "status:shipped"
+```
+
+Details, failure demos (stop the sink, replay all history) and troubleshooting:
+[docs/phase-2-es-sink.md](docs/phase-2-es-sink.md).
 
 Optional Kafka browser UI: `docker compose --profile tools up -d` then open http://localhost:8080.
 

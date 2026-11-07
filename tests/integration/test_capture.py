@@ -8,42 +8,19 @@ Skipped automatically when the stack is not reachable.
 from __future__ import annotations
 
 import json
-import socket
 import time
 import uuid
 from typing import Any
 
-import httpx
 import psycopg
 import pytest
 from confluent_kafka import Consumer
 
-from deltaflow import connect
 from deltaflow.config import get_settings
 
 pytestmark = pytest.mark.integration
 
 TOPIC = "deltaflow.public.customers"
-
-
-def _reachable(host: str, port: int) -> bool:
-    try:
-        with socket.create_connection((host, port), timeout=1):
-            return True
-    except OSError:
-        return False
-
-
-@pytest.fixture(scope="module", autouse=True)
-def running_connector() -> None:
-    if not all(_reachable("127.0.0.1", port) for port in (5432, 29092, 8083)):
-        pytest.skip("compose stack is not running (docker compose up -d --wait)")
-    name, config = connect.render_connector(
-        connect.DEFAULT_CONNECTOR_FILE, connect.template_variables({})
-    )
-    with httpx.Client(base_url=get_settings().connect_url, timeout=15.0) as client:
-        connect.register_connector(client, name, config)
-        connect.wait_until_running(client, name)
 
 
 def _collect(customer_id: int, expected: int, timeout: float = 45.0) -> list[dict[str, Any] | None]:

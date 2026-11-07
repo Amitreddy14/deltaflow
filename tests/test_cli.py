@@ -20,3 +20,17 @@ def test_loadgen_options() -> None:
 def test_tail_requires_a_topic() -> None:
     with pytest.raises(SystemExit):
         build_parser().parse_args(["tail"])
+
+
+def test_run_es_sink_defaults() -> None:
+    args = build_parser().parse_args(["run-es-sink"])
+
+    assert args.group_id == "deltaflow-es-sink"
+    assert args.topic_pattern.startswith("^deltaflow")
+    assert args.batch_size == 200
+
+
+def test_search_takes_a_table_and_text() -> None:
+    args = build_parser().parse_args(["search", "customers", "Reddy", "--size", "3"])
+
+    assert (args.table, args.text, args.size) == ("customers", "Reddy", 3)
