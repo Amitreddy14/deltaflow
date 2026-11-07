@@ -6,8 +6,8 @@ from deltaflow.config import Settings
 def test_defaults_match_local_compose_stack() -> None:
     settings = Settings(_env_file=None)
 
-    assert settings.kafka_bootstrap_servers == "localhost:29092"
-    assert settings.connect_url == "http://localhost:8083"
+    assert settings.kafka_bootstrap_servers == "127.0.0.1:29092"
+    assert settings.connect_url == "http://127.0.0.1:8083"
     assert settings.mongo_database == "deltaflow"
 
 

@@ -18,6 +18,10 @@
     "publication.name": "deltaflow_pub",
     "publication.autocreate.mode": "disabled",
 
+    "topic.creation.default.replication.factor": "1",
+    "topic.creation.default.partitions": "3",
+    "topic.creation.default.cleanup.policy": "delete",
+
     "snapshot.mode": "initial",
     "tombstones.on.delete": "true",
     "heartbeat.interval.ms": "10000",

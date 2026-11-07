@@ -54,6 +54,15 @@ def connector_status(client: httpx.Client, name: str) -> dict[str, Any]:
     return body
 
 
+def restart_connector(client: httpx.Client, name: str) -> None:
+    """Restart a connector and its tasks (fixes UNASSIGNED after a broker restart)."""
+    response = client.post(
+        f"/connectors/{name}/restart", params={"includeTasks": "true", "onlyFailed": "false"}
+    )
+    if response.status_code not in (200, 202, 204):
+        raise ConnectError(f"restart {name!r} failed: {response.status_code} {response.text}")
+
+
 def is_running(status: Mapping[str, Any]) -> bool:
     """True when the connector and every one of its tasks report RUNNING."""
     tasks = status.get("tasks", [])
@@ -70,11 +79,18 @@ def wait_until_running(
     *,
     timeout: float = 90.0,
     interval: float = 2.0,
+    restart_after: float = 20.0,
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
 ) -> dict[str, Any]:
-    """Poll until the connector and its tasks are RUNNING. Fails fast on FAILED."""
-    deadline = clock() + timeout
+    """Poll until the connector and its tasks are RUNNING. Fails fast on FAILED.
+
+    If the connector stays UNASSIGNED for `restart_after` seconds (it can after a Kafka broker
+    restart, even though its task runs), restart it once.
+    """
+    started = clock()
+    deadline = started + timeout
+    restarted = False
     while True:
         try:
             status = connector_status(client, name)
@@ -87,6 +103,13 @@ def wait_until_running(
                 raise ConnectError(f"connector {name!r} FAILED: {trace[:600]}")
             if is_running(status):
                 return status
+            if (
+                not restarted
+                and status["connector"]["state"] == "UNASSIGNED"
+                and clock() - started >= restart_after
+            ):
+                restart_connector(client, name)
+                restarted = True
         if clock() >= deadline:
             raise ConnectError(f"connector {name!r} not RUNNING after {timeout:.0f}s: {status}")
         sleep(interval)

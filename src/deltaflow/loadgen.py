@@ -139,8 +139,9 @@ def run(
         raise ValueError("rate must be positive")
     rng = random.Random(seed)
     counts: Counter[Op] = Counter()
-    started = clock()
     with psycopg.connect(dsn, autocommit=True) as conn:
+        # Start the clock only after connecting: a slow connect must not eat the run time.
+        started = clock()
         try:
             while duration is None or clock() - started < duration:
                 op = choose_operation(rng)

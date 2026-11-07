@@ -94,4 +94,5 @@ the full old row; and the LSN strictly increases.
 | `register-connector`: connection refused | Connect takes about 30 s to start. Run `docker compose up -d --wait` first. |
 | Connector `FAILED`, "publication does not exist" | The volume was created before Phase 1. Run `docker compose down -v` and start again. |
 | Postgres disk grows while the connector is stopped | The replication slot retains WAL by design. Delete the connector and drop the slot: `SELECT pg_drop_replication_slot('deltaflow_slot');` |
+| Connect exits with "`_connect_offsets` ... required to have cleanup.policy=compact" | That topic was auto-created with the wrong policy. Auto-creation is now disabled in compose. Reset once with `docker compose down -v`, then start again. |
 | No topics yet | Topics appear after the snapshot starts; check `deltaflow connector-status`. |
