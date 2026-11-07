@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     connect_url: str = "http://127.0.0.1:8083"
     elasticsearch_url: str = "http://127.0.0.1:9200"
     mongo_url: str = "mongodb://127.0.0.1:27017"
+    # Regex (leading ^) so workers pick up topics the connector creates after they start.
+    kafka_topic_pattern: str = r"^deltaflow\.public\..+"
     mongo_database: str = "deltaflow"
 
 

@@ -20,4 +20,4 @@ write idempotent and order-safe using the source **LSN** as a version:
 
 - Redelivery, restarts and replays are safe by construction.
 - Sinks must store the LSN with each document.
-- Elasticsearch keeps delete versions for a limited time (`index.gc_deletes`, 60 s by default), so a very late replayed update after a delete could resurrect a row. Mitigation: the replay tooling targets a quiesced consumer group, and this limit is documented. The tests cover the in-window case.
+- Elasticsearch keeps delete versions for a limited time (`index.gc_deletes`, 60 s by default; Deltaflow raises it to 10 minutes, see ADR-0008), so a very late replayed update after a delete could resurrect a row. Mitigation: the replay tooling targets a quiesced consumer group, and this limit is documented. The tests cover the in-window case.
