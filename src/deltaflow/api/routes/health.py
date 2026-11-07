@@ -1,4 +1,4 @@
-"""Liveness endpoint. Dependency-aware readiness arrives in a later phase."""
+"""Liveness endpoint: the process is up. Dependency checks live in `/ready`."""
 
 from fastapi import APIRouter
 from pydantic import BaseModel

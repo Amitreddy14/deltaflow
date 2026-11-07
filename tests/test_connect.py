@@ -126,3 +126,17 @@ def test_wait_restarts_a_connector_stuck_unassigned() -> None:
 
     assert restarted == [True]  # restarted exactly once
     assert connect.is_running(status)
+
+
+def test_connector_status_distinguishes_a_missing_connector() -> None:
+    import httpx
+
+    from deltaflow import connect
+
+    client = httpx.Client(
+        base_url="http://c", transport=httpx.MockTransport(lambda r: httpx.Response(404))
+    )
+
+    with pytest.raises(connect.ConnectorNotFound):
+        connect.connector_status(client, "x")
+    assert issubclass(connect.ConnectorNotFound, connect.ConnectError)  # old callers still work

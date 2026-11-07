@@ -7,7 +7,7 @@ or events are replayed.
 
 [![CI](https://github.com/Amitreddy14/deltaflow/actions/workflows/ci.yml/badge.svg)](https://github.com/Amitreddy14/deltaflow/actions/workflows/ci.yml)
 
-> **Status:** Phase 4 complete: row changes flow from Postgres through Kafka into Elasticsearch (search) and MongoDB (current state, history, analytics) with replay-safe writes, dead-letter quarantine for poison events, TRUNCATE support and clean shutdown. See the [roadmap](docs/ROADMAP.md).
+> **Status:** Phase 5 complete: row changes flow from Postgres through Kafka into Elasticsearch (search) and MongoDB (current state, history, analytics) with replay-safe writes, dead-letter quarantine, TRUNCATE support, clean shutdown, and an HTTP control plane with readiness, lag, connector control and Prometheus metrics. See the [roadmap](docs/ROADMAP.md).
 
 ## Architecture
 
@@ -91,6 +91,18 @@ deltaflow dlq replay es           # re-publish them once the cause is fixed
 
 Demos (poison message, truncate and restore, graceful stop) and troubleshooting:
 [docs/phase-4-reliability.md](docs/phase-4-reliability.md).
+
+### Control plane (Phase 5)
+
+```bash
+curl http://127.0.0.1:8000/ready       # dependencies reachable? (503 if not)
+curl http://127.0.0.1:8000/pipeline    # healthy or degraded, and why
+curl http://127.0.0.1:8000/lag         # how far behind each sink is
+curl http://127.0.0.1:8000/metrics     # Prometheus
+```
+
+Endpoints, demos, API key protection and metrics: [docs/phase-5-control-plane.md](docs/phase-5-control-plane.md).
+Interactive API docs at `/docs`.
 
 Optional Kafka browser UI: `docker compose --profile tools up -d` then open http://localhost:8080.
 

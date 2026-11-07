@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     # Regex (leading ^) so workers pick up topics the connector creates after they start.
     kafka_topic_pattern: str = r"^deltaflow\.public\..+"
     mongo_database: str = "deltaflow"
+    connector_name: str = "shop-postgres"
+    # When set, every state-changing API call must send it as the X-API-Key header.
+    # Unset means open access, which is only appropriate for local development.
+    api_key: str | None = None
 
 
 @lru_cache
