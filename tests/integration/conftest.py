@@ -26,12 +26,14 @@ def _endpoints() -> list[tuple[str, int]]:
     postgres = urlparse(settings.postgres_dsn)
     connect_url = urlparse(settings.connect_url)
     es_url = urlparse(settings.elasticsearch_url)
+    mongo_url = urlparse(settings.mongo_url)
     kafka_host, _, kafka_port = settings.kafka_bootstrap_servers.rpartition(":")
     return [
         (postgres.hostname or "127.0.0.1", postgres.port or 5432),
         (kafka_host, int(kafka_port)),
         (connect_url.hostname or "127.0.0.1", connect_url.port or 8083),
         (es_url.hostname or "127.0.0.1", es_url.port or 9200),
+        (mongo_url.hostname or "127.0.0.1", mongo_url.port or 27017),
     ]
 
 
