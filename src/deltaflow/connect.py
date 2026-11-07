@@ -23,6 +23,10 @@ class ConnectError(RuntimeError):
     """Kafka Connect rejected a request or the connector is unhealthy."""
 
 
+class ConnectorNotFound(ConnectError):
+    """The named connector does not exist in Kafka Connect."""
+
+
 def template_variables(env: Mapping[str, str]) -> dict[str, str]:
     """Values for ${...} placeholders: environment first, then local-dev defaults."""
     return {key: env.get(key, default) for key, default in _TEMPLATE_DEFAULTS.items()}
@@ -48,6 +52,8 @@ def register_connector(client: httpx.Client, name: str, config: Mapping[str, Any
 
 def connector_status(client: httpx.Client, name: str) -> dict[str, Any]:
     response = client.get(f"/connectors/{name}/status")
+    if response.status_code == 404:
+        raise ConnectorNotFound(f"connector {name!r} does not exist")
     if response.status_code != 200:
         raise ConnectError(f"status {name!r} failed: {response.status_code} {response.text}")
     body: dict[str, Any] = response.json()
@@ -61,6 +67,23 @@ def restart_connector(client: httpx.Client, name: str) -> None:
     )
     if response.status_code not in (200, 202, 204):
         raise ConnectError(f"restart {name!r} failed: {response.status_code} {response.text}")
+
+
+def _lifecycle(client: httpx.Client, name: str, action: str) -> None:
+    response = client.put(f"/connectors/{name}/{action}")
+    if response.status_code == 404:
+        raise ConnectorNotFound(f"connector {name!r} does not exist")
+    if response.status_code not in (200, 202):
+        raise ConnectError(f"{action} {name!r} failed: {response.status_code} {response.text}")
+
+
+def pause_connector(client: httpx.Client, name: str) -> None:
+    """Stop capturing. Postgres keeps the WAL the slot needs, so pause only briefly."""
+    _lifecycle(client, name, "pause")
+
+
+def resume_connector(client: httpx.Client, name: str) -> None:
+    _lifecycle(client, name, "resume")
 
 
 def is_running(status: Mapping[str, Any]) -> bool:

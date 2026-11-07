@@ -8,6 +8,7 @@ WORKDIR /app
 
 COPY pyproject.toml README.md ./
 COPY src ./src
+COPY infra ./infra
 RUN pip install .
 
 RUN useradd --create-home --uid 10001 deltaflow

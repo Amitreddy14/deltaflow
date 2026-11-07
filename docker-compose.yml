@@ -136,6 +136,11 @@ services:
       DELTAFLOW_CONNECT_URL: http://connect:8083
       DELTAFLOW_ELASTICSEARCH_URL: http://elasticsearch:9200
       DELTAFLOW_MONGO_URL: mongodb://mongodb:27017
+      DELTAFLOW_POSTGRES_DSN: postgresql://${POSTGRES_USER:-deltaflow}:${POSTGRES_PASSWORD:-deltaflow}@postgres:5432/${POSTGRES_DB:-shop}
+      DELTAFLOW_API_KEY: ${DELTAFLOW_API_KEY:-}
+      POSTGRES_USER: ${POSTGRES_USER:-deltaflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-deltaflow}
+      POSTGRES_DB: ${POSTGRES_DB:-shop}
     ports:
       - "127.0.0.1:${API_HOST_PORT:-8000}:8000"
 
@@ -177,6 +182,17 @@ services:
       DELTAFLOW_MONGO_URL: mongodb://mongodb:27017
     healthcheck:
       disable: true # the image's HTTP healthcheck belongs to the API; this process has no port
+
+  # Optional metrics store: docker compose --profile monitoring up -d
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    profiles: ["monitoring"]
+    depends_on:
+      - api
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "127.0.0.1:${PROMETHEUS_HOST_PORT:-9090}:9090"
 
   # Optional UI for browsing topics and messages: docker compose --profile tools up -d
   kafka-ui:
