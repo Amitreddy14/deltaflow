@@ -36,7 +36,7 @@ def _reachable(host: str, port: int) -> bool:
 
 @pytest.fixture(scope="module", autouse=True)
 def running_connector() -> None:
-    if not all(_reachable("localhost", port) for port in (5432, 29092, 8083)):
+    if not all(_reachable("127.0.0.1", port) for port in (5432, 29092, 8083)):
         pytest.skip("compose stack is not running (docker compose up -d --wait)")
     name, config = connect.render_connector(
         connect.DEFAULT_CONNECTOR_FILE, connect.template_variables({})

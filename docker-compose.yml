@@ -1,7 +1,8 @@
 # Local development stack. Every service has a healthcheck so `depends_on`
 # conditions are real and `docker compose up --wait` blocks until all are healthy.
 #
-# Host ports (all bound to localhost only):
+# Host ports (localhost only). Override any with *_HOST_PORT in .env if one is taken.
+# Defaults:
 #   5432 postgres | 29092 kafka | 8083 debezium connect | 9200 elasticsearch
 #   27017 mongodb | 8000 api    | 8080 kafka-ui (profile "tools")
 
@@ -23,7 +24,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-deltaflow}
       POSTGRES_DB: ${POSTGRES_DB:-shop}
     ports:
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
@@ -41,17 +42,19 @@ services:
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_LISTENERS: INTERNAL://:9092,CONTROLLER://:9093,EXTERNAL://:29092
-      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:29092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://127.0.0.1:29092
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
-      KAFKA_NUM_PARTITIONS: 3
+      # Topics are created explicitly, never by accident: an auto-created topic gets the broker
+      # default (cleanup.policy=delete), which Kafka Connect refuses for its internal topics.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
       KAFKA_HEAP_OPTS: -Xms256m -Xmx512m
     ports:
-      - "127.0.0.1:29092:29092"
+      - "127.0.0.1:${KAFKA_HOST_PORT:-29092}:29092"
     volumes:
       - kafka-data:/var/lib/kafka/data
     healthcheck:
@@ -79,7 +82,7 @@ services:
       STATUS_STORAGE_REPLICATION_FACTOR: 1
       KAFKA_HEAP_OPTS: -Xms256m -Xmx512m
     ports:
-      - "127.0.0.1:8083:8083"
+      - "127.0.0.1:${CONNECT_HOST_PORT:-8083}:8083"
     healthcheck:
       test: ["CMD-SHELL", "curl -fs http://localhost:8083/connectors > /dev/null"]
       interval: 10s
@@ -94,7 +97,7 @@ services:
       xpack.security.enabled: "false"
       ES_JAVA_OPTS: -Xms512m -Xmx512m
     ports:
-      - "127.0.0.1:9200:9200"
+      - "127.0.0.1:${ELASTICSEARCH_HOST_PORT:-9200}:9200"
     volumes:
       - elasticsearch-data:/usr/share/elasticsearch/data
     ulimits:
@@ -111,7 +114,7 @@ services:
   mongodb:
     image: mongo:7
     ports:
-      - "127.0.0.1:27017:27017"
+      - "127.0.0.1:${MONGO_HOST_PORT:-27017}:27017"
     volumes:
       - mongo-data:/data/db
     healthcheck:
@@ -133,7 +136,7 @@ services:
       DELTAFLOW_ELASTICSEARCH_URL: http://elasticsearch:9200
       DELTAFLOW_MONGO_URL: mongodb://mongodb:27017
     ports:
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:${API_HOST_PORT:-8000}:8000"
 
   # Optional UI for browsing topics and messages: docker compose --profile tools up -d
   kafka-ui:
@@ -146,7 +149,7 @@ services:
       KAFKA_CLUSTERS_0_NAME: deltaflow
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:${KAFKA_UI_HOST_PORT:-8080}:8080"
 
 volumes:
   postgres-data:

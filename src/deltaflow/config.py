@@ -17,12 +17,13 @@ class Settings(BaseSettings):
     environment: str = "development"
     log_level: str = "INFO"
 
-    # Reachable from the host. Inside the compose network the services override these.
-    postgres_dsn: str = "postgresql://deltaflow:deltaflow@localhost:5432/shop"
-    kafka_bootstrap_servers: str = "localhost:29092"
-    connect_url: str = "http://localhost:8083"
-    elasticsearch_url: str = "http://localhost:9200"
-    mongo_url: str = "mongodb://localhost:27017"
+    # Reachable from the host. 127.0.0.1 (not localhost) avoids slow IPv6-first lookups on Windows.
+    # Inside the compose network the services override these.
+    postgres_dsn: str = "postgresql://deltaflow:deltaflow@127.0.0.1:5432/shop"
+    kafka_bootstrap_servers: str = "127.0.0.1:29092"
+    connect_url: str = "http://127.0.0.1:8083"
+    elasticsearch_url: str = "http://127.0.0.1:9200"
+    mongo_url: str = "mongodb://127.0.0.1:27017"
     mongo_database: str = "deltaflow"
 
 

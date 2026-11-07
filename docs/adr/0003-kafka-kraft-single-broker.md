@@ -11,8 +11,7 @@ cannot run a multi-broker cluster.
 ## Decision
 
 Run one Kafka broker in **KRaft** mode (combined broker and controller) using the official
-`apache/kafka` image. Internal replication factors are set to 1. Topics get 3 partitions by
-default so that consumer parallelism and per-key ordering are still demonstrated.
+`apache/kafka` image. Internal replication factors are set to 1. **Automatic topic creation is disabled**: every topic is created explicitly (the connector creates its data topics with 3 partitions, so consumer parallelism and per-key ordering are still demonstrated). Auto-created topics get the broker default `cleanup.policy=delete`, and Kafka Connect refuses to start when its internal offsets topic has that policy (found the hard way in Phase 1).
 
 ## Consequences
 

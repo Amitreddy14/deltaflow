@@ -29,6 +29,8 @@ def test_shipped_connector_renders_with_no_unresolved_placeholders() -> None:
     assert config["plugin.name"] == "pgoutput"
     assert config["publication.name"] == "deltaflow_pub"
     assert config["key.converter.schemas.enable"] == "false"
+    # Topics are created by the connector itself because broker auto-creation is disabled.
+    assert config["topic.creation.default.partitions"] == "3"
     assert "${" not in json.dumps(config)
 
 
@@ -103,3 +105,24 @@ def test_wait_until_running_times_out() -> None:
         connect.wait_until_running(
             client, "c", timeout=90, sleep=lambda _: None, clock=lambda: float(next(ticks))
         )
+
+
+def test_wait_restarts_a_connector_stuck_unassigned() -> None:
+    restarted: list[bool] = []
+    stuck = {"connector": {"state": "UNASSIGNED"}, "tasks": [{"state": "RUNNING"}]}
+    healthy = {"connector": {"state": "RUNNING"}, "tasks": [{"state": "RUNNING"}]}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            restarted.append(True)
+            return httpx.Response(202)
+        return httpx.Response(200, json=healthy if restarted else stuck)
+
+    ticks = iter(range(0, 1000, 10))
+
+    status = connect.wait_until_running(
+        _client(handler), "c", sleep=lambda _: None, clock=lambda: float(next(ticks))
+    )
+
+    assert restarted == [True]  # restarted exactly once
+    assert connect.is_running(status)
