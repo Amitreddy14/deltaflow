@@ -12,14 +12,12 @@ import uuid
 from collections import Counter
 from collections.abc import Callable
 from functools import partial
-from typing import Any
 
 import httpx
 import psycopg
-from elasticsearch import Elasticsearch
-from pymongo import MongoClient
 
 from deltaflow import bench, chaos, connect, loadgen, verify
+from deltaflow.clients import elasticsearch_client, mongo_client
 from deltaflow.config import Settings
 from deltaflow.sinks.elasticsearch import index_name
 
@@ -83,10 +81,8 @@ def docker_recover(settings: Settings, *, timeout: float) -> None:
 
 def deep_check(settings: Settings, *, wait: float) -> list[str]:
     """Row-by-row comparison of both sinks with Postgres, retrying while the sinks catch up."""
-    es = Elasticsearch(settings.elasticsearch_url)
-    mongo: MongoClient[dict[str, Any]] = MongoClient(
-        settings.mongo_url, serverSelectionTimeoutMS=10000
-    )
+    es = elasticsearch_client(settings=settings)
+    mongo = mongo_client(settings=settings)
 
     def once() -> list[str]:
         sinks = {
@@ -155,10 +151,8 @@ def run_bench(
     say: Callable[[str], None] = print,
 ) -> tuple[list[bench.LatencySummary], bench.ThroughputResult]:
     run_id = uuid.uuid4().hex[:8]
-    es = Elasticsearch(settings.elasticsearch_url)
-    mongo: MongoClient[dict[str, Any]] = MongoClient(
-        settings.mongo_url, serverSelectionTimeoutMS=10000
-    )
+    es = elasticsearch_client(settings=settings)
+    mongo = mongo_client(settings=settings)
     customers = mongo[settings.mongo_database]["customers"]
     index = index_name("customers")
 

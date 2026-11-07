@@ -7,7 +7,24 @@ or events are replayed.
 
 [![CI](https://github.com/Amitreddy14/deltaflow/actions/workflows/ci.yml/badge.svg)](https://github.com/Amitreddy14/deltaflow/actions/workflows/ci.yml)
 
-> **Status:** Phase 6 complete: every claim is backed by a crash test (`deltaflow chaos` ends in `PASS`). Also: row changes flow from Postgres through Kafka into Elasticsearch (search) and MongoDB (current state, history, analytics) with replay-safe writes, dead-letter quarantine, TRUNCATE support, clean shutdown, and an HTTP control plane with readiness, lag, connector control and Prometheus metrics. See the [roadmap](docs/ROADMAP.md).
+> **Status: v1.0, all phases complete.** Production deploy files, a deployment guide for a free
+> cloud VM, and a crash test that ends in `PASS`. Not yet deployed to a real cloud account; the
+> [guide](docs/deployment.md) says exactly what is and is not verified.
+
+## What makes it more than a demo
+
+- **Correct under failure, and it proves it.** `deltaflow chaos` SIGKILLs both sink workers and
+  restarts Debezium while the database is changing, then compares every row in Postgres,
+  Elasticsearch and MongoDB. A green run ends in `PASS`; CI runs it on every pull request.
+- **Idempotent by construction.** Each write carries the change's WAL position (LSN) and sinks
+  ignore anything older than what they hold, so replays and redeliveries are harmless.
+- **Bad data does not stop the line.** Poison events are bisected out of a batch and parked on a
+  dead-letter topic with the reason; transient outages are retried, never dead-lettered.
+- **Operable.** HTTP control plane (readiness, lag, dead letters, connector control, Prometheus),
+  heartbeat-based health checks, clean shutdown that never loses a committed batch.
+- **Deployable.** One command generates secrets; one compose file runs it behind automatic HTTPS
+  with every datastore closed to the internet. The security model, including its limits, is in
+  [SECURITY.md](SECURITY.md).
 
 ## Architecture
 
@@ -20,6 +37,9 @@ flowchart LR
     API[FastAPI control plane] -.-> DBZ
     API -.-> K
 ```
+
+A hardened variant of the same stack (HTTPS front door, authenticated datastores, nothing but
+Caddy reachable from outside) is in [docs/deployment.md](docs/deployment.md).
 
 Key properties: per-row ordering (messages keyed by primary key), at-least-once delivery with
 **LSN-guarded idempotent sinks** (replays are harmless), dead-letter topics, and independent
@@ -102,7 +122,7 @@ curl http://127.0.0.1:8000/metrics     # Prometheus
 ```
 
 Endpoints, demos, API key protection and metrics: [docs/phase-5-control-plane.md](docs/phase-5-control-plane.md).
-Interactive API docs at `/docs`.
+Interactive API docs at `/docs` (development; disabled in production mode).
 
 ### Proof: crash it, then compare every row (Phase 6)
 
@@ -119,7 +139,29 @@ Details, what the proof does and does not cover, and CI: [docs/phase-6-proof.md]
 Measured with `deltaflow bench` on one machine, a single Kafka broker and one worker per sink.
 They describe that setup, not a general limit.
 
-<!-- Run `deltaflow bench` and paste its table here, with your CPU/RAM in one line above it. -->
+Run on a developer laptop under Docker Desktop (hardware details: _add CPU / RAM here_):
+
+| Measure | Elasticsearch | MongoDB |
+|---|---|---|
+| Latency, one change, p50 | 905 ms | 618 ms |
+| Latency, p95 | 1303 ms | 1495 ms |
+| Latency, p99 | 1321 ms | 1512 ms |
+| Throughput, 5,000 rows, end to end | about 4,890 rows/s | about 4,870 rows/s |
+
+Postgres accepted the 5,000 rows at about 29,000 rows/s, so the pipeline, not the source, is the
+limit. The throughput figure is a lower bound for a drain that took about one second; a larger
+run (`deltaflow bench --rows 50000`) gives a steadier number. Most of the latency is probably
+Debezium's poll interval and the sinks' batching (not yet profiled).
+
+### Deploy it (Phase 7)
+
+```bash
+deltaflow gen-env --domain <your-host> --email <you@example.com>   # writes .env.prod, secrets
+docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --wait
+```
+
+Step-by-step for a free Oracle Cloud VM (account, firewall, HTTPS, backups, upgrades, recovery):
+[docs/deployment.md](docs/deployment.md). Security model: [SECURITY.md](SECURITY.md).
 
 Optional Kafka browser UI: `docker compose --profile tools up -d` then open http://localhost:8080.
 
@@ -139,13 +181,23 @@ uvicorn deltaflow.api.main:app --reload
 ## Project layout
 
 ```
-src/deltaflow/      application package: API, connector tools, load generator, CLI
-infra/              Postgres init SQL (schema, seed, publication) and Debezium connector config
-tests/              unit tests, plus tests/integration (needs the compose stack)
-docs/               design document, ADRs, roadmap
-docker-compose.yml  local stack: Postgres, Kafka, Debezium, Elasticsearch, MongoDB, API
-.github/            CI workflow, PR template, Dependabot
+src/deltaflow/        application package
+  events.py sinks/    change-event model; Elasticsearch and MongoDB sinks
+  worker.py runners.py  consumer loop, retries, dead letters, shutdown
+  api/ ops.py         FastAPI control plane and the operations facade
+  chaos.py proof.py bench.py verify.py   the correctness proof and benchmarks
+  clients.py envgen.py  datastore clients with auth; production secret generation
+infra/                Postgres init SQL, Debezium connector, Caddy and Prometheus configs
+deploy/               backup script
+tests/                unit tests, plus tests/integration (needs the compose stack)
+docs/                 design, ADRs, roadmap, per-phase guides, deployment guide
+docker-compose.yml        local stack
+docker-compose.prod.yml   production stack (HTTPS, auth, private network)
+.github/              CI (lint, types, tests, full-stack chaos) and the release workflow
 ```
+
+Further reading: [design](docs/DESIGN.md), [ADRs](docs/adr/), [roadmap](docs/ROADMAP.md),
+[changelog](CHANGELOG.md), [contributing](CONTRIBUTING.md).
 
 ## License
 
