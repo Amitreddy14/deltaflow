@@ -11,13 +11,25 @@ import sys
 import threading
 import time
 from collections.abc import Sequence
+from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import httpx
 
-from deltaflow import analytics, connect, deadletter, loadgen, runners, tail, verify
+from deltaflow import (
+    analytics,
+    bench,
+    chaos,
+    connect,
+    deadletter,
+    loadgen,
+    proof,
+    runners,
+    tail,
+    verify,
+)
 from deltaflow.config import get_settings
 
 
@@ -92,10 +104,38 @@ def build_parser() -> argparse.ArgumentParser:
     check.add_argument(
         "--wait", type=float, default=0.0, help="seconds to wait for sinks to catch up"
     )
+    check.add_argument(
+        "--deep",
+        action="store_true",
+        help="compare row values too, not just counts",
+    )
     check.add_argument("--dsn", default=settings.postgres_dsn)
     check.add_argument("--elasticsearch-url", default=settings.elasticsearch_url)
     check.add_argument("--mongo-url", default=settings.mongo_url)
     check.add_argument("--mongo-database", default=settings.mongo_database)
+
+    chaos_cmd = commands.add_parser(
+        "chaos",
+        help="crash services while the database changes, then prove the sinks equal the source",
+    )
+    chaos_cmd.add_argument("--duration", type=float, default=40.0, help="seconds of load")
+    chaos_cmd.add_argument("--rate", type=float, default=20.0, help="operations per second")
+    chaos_cmd.add_argument("--seed", type=int, default=None)
+    chaos_cmd.add_argument(
+        "--with-kafka", action="store_true", help="also restart the Kafka broker (harsher)"
+    )
+    chaos_cmd.add_argument("--recovery-timeout", type=float, default=180.0)
+    chaos_cmd.add_argument(
+        "--skip-baseline", action="store_true", help="do not check consistency before starting"
+    )
+
+    bench_cmd = commands.add_parser("bench", help="measure end-to-end latency and throughput")
+    bench_cmd.add_argument("--rows", type=int, default=5000, help="rows for the throughput test")
+    bench_cmd.add_argument("--batch", type=int, default=100, help="rows per transaction")
+    bench_cmd.add_argument("--probes", type=int, default=30, help="single-row latency probes")
+    bench_cmd.add_argument("--timeout", type=float, default=300.0)
+    bench_cmd.add_argument("--keep", action="store_true", help="leave the benchmark rows in place")
+    bench_cmd.add_argument("--json", type=Path, default=None, help="also write results as JSON")
     return parser
 
 
@@ -206,6 +246,71 @@ def _analytics(args: argparse.Namespace) -> None:
     print(format_table(rows))
 
 
+def _verify_deep(args: argparse.Namespace) -> int:
+    settings = get_settings().model_copy(update={"postgres_dsn": args.dsn})
+    problems = proof.deep_check(settings, wait=args.wait)
+    if problems:
+        print("MISMATCH:\n  " + "\n  ".join(problems), file=sys.stderr)
+        return 1
+    print("OK: every row in every sink matches the source, value for value")
+    return 0
+
+
+def _chaos(args: argparse.Namespace) -> int:
+    logging.basicConfig(level="WARNING")
+    try:
+        report = proof.run_chaos_experiment(
+            get_settings(),
+            rate=args.rate,
+            duration=args.duration,
+            seed=args.seed,
+            with_kafka=args.with_kafka,
+            recovery_timeout=args.recovery_timeout,
+            baseline=not args.skip_baseline,
+        )
+    except chaos.ChaosError as exc:
+        print(f"\nexperiment could not run: {exc}", file=sys.stderr)
+        return 2
+    print(f"\nfaults injected: {len(report.faults)}; operations: {sum(report.operations.values())}")
+    if report.passed:
+        print(f"PASS: after {len(report.faults)} crashes/restarts every sink equals the source")
+        return 0
+    print("FAIL:\n  " + "\n  ".join(report.problems), file=sys.stderr)
+    return 1
+
+
+def _bench(args: argparse.Namespace) -> int:
+    try:
+        latency, throughput = proof.run_bench(
+            get_settings(),
+            rows=args.rows,
+            batch=args.batch,
+            probes=args.probes,
+            timeout=args.timeout,
+            keep=args.keep,
+        )
+    except bench.BenchError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print("\n" + bench.markdown_report(latency, throughput))
+    if args.json:
+        args.json.write_text(
+            json.dumps(
+                {
+                    "latency": [asdict(item) for item in latency],
+                    "throughput": {
+                        **asdict(throughput),
+                        "write_rate": throughput.write_rate,
+                        "pipeline_rate": throughput.pipeline_rate,
+                    },
+                },
+                indent=2,
+            )
+        )
+        print(f"\nwrote {args.json}")
+    return 0
+
+
 def _verify(args: argparse.Namespace) -> int:
     from elasticsearch import Elasticsearch
     from pymongo import MongoClient
@@ -286,7 +391,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "analytics":
             _analytics(args)
         elif args.command == "verify":
-            return _verify(args)
+            return _verify_deep(args) if args.deep else _verify(args)
+        elif args.command == "chaos":
+            return _chaos(args)
+        elif args.command == "bench":
+            return _bench(args)
     except (connect.ConnectError, httpx.HTTPError, RuntimeError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

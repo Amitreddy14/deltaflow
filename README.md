@@ -7,7 +7,7 @@ or events are replayed.
 
 [![CI](https://github.com/Amitreddy14/deltaflow/actions/workflows/ci.yml/badge.svg)](https://github.com/Amitreddy14/deltaflow/actions/workflows/ci.yml)
 
-> **Status:** Phase 5 complete: row changes flow from Postgres through Kafka into Elasticsearch (search) and MongoDB (current state, history, analytics) with replay-safe writes, dead-letter quarantine, TRUNCATE support, clean shutdown, and an HTTP control plane with readiness, lag, connector control and Prometheus metrics. See the [roadmap](docs/ROADMAP.md).
+> **Status:** Phase 6 complete: every claim is backed by a crash test (`deltaflow chaos` ends in `PASS`). Also: row changes flow from Postgres through Kafka into Elasticsearch (search) and MongoDB (current state, history, analytics) with replay-safe writes, dead-letter quarantine, TRUNCATE support, clean shutdown, and an HTTP control plane with readiness, lag, connector control and Prometheus metrics. See the [roadmap](docs/ROADMAP.md).
 
 ## Architecture
 
@@ -103,6 +103,23 @@ curl http://127.0.0.1:8000/metrics     # Prometheus
 
 Endpoints, demos, API key protection and metrics: [docs/phase-5-control-plane.md](docs/phase-5-control-plane.md).
 Interactive API docs at `/docs`.
+
+### Proof: crash it, then compare every row (Phase 6)
+
+```bash
+deltaflow chaos            # SIGKILL both sinks, restart Debezium, under load -> PASS or FAIL
+deltaflow verify --deep    # row-by-row comparison of Postgres, Elasticsearch and MongoDB
+deltaflow bench            # latency and throughput; prints a Markdown table
+```
+
+Details, what the proof does and does not cover, and CI: [docs/phase-6-proof.md](docs/phase-6-proof.md).
+
+#### Benchmarks
+
+Measured with `deltaflow bench` on one machine, a single Kafka broker and one worker per sink.
+They describe that setup, not a general limit.
+
+<!-- Run `deltaflow bench` and paste its table here, with your CPU/RAM in one line above it. -->
 
 Optional Kafka browser UI: `docker compose --profile tools up -d` then open http://localhost:8080.
 

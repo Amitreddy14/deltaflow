@@ -42,3 +42,33 @@ jobs:
         run: docker compose config --quiet
       - name: Build API image
         run: docker build -t deltaflow-api:ci .
+
+  integration:
+    name: Full stack, integration tests and chaos proof
+    needs: python
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Start the stack
+        run: docker compose up -d --wait --build
+      - name: Register the connector
+        run: deltaflow register-connector
+      - name: Integration tests
+        run: pytest -m integration -v
+      - name: Chaos proof (crash sinks and Debezium under load)
+        run: deltaflow chaos --duration 40 --rate 15
+      - name: Show service state and logs on failure
+        if: failure()
+        run: |
+          docker compose ps -a
+          docker compose logs --tail 150 connect es-sink mongo-sink
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
