@@ -81,3 +81,24 @@ def test_dlq_command_takes_an_action_and_a_sink() -> None:
     assert (args.action, args.sink, args.limit) == ("show", "es", 5)
     with pytest.raises(SystemExit):
         build_parser().parse_args(["dlq", "purge", "es"])
+
+
+def test_chaos_defaults_and_options() -> None:
+    args = build_parser().parse_args(["chaos"])
+    assert (args.duration, args.rate, args.with_kafka, args.skip_baseline) == (
+        40.0,
+        20.0,
+        False,
+        False,
+    )
+
+    harsh = build_parser().parse_args(["chaos", "--with-kafka", "--duration", "60"])
+    assert harsh.with_kafka and harsh.duration == 60.0
+
+
+def test_bench_defaults_and_verify_deep() -> None:
+    args = build_parser().parse_args(["bench", "--rows", "1000", "--json", "out.json"])
+    assert (args.rows, args.batch, args.probes, args.keep) == (1000, 100, 30, False)
+    assert str(args.json) == "out.json"
+
+    assert build_parser().parse_args(["verify", "--deep"]).deep is True

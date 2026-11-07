@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     kafka_topic_pattern: str = r"^deltaflow\.public\..+"
     mongo_database: str = "deltaflow"
     connector_name: str = "shop-postgres"
+    # A sink worker touches this file every loop, so a container healthcheck can tell a worker
+    # that is consuming from one that is hung. Unset disables the heartbeat.
+    heartbeat_file: str | None = None
     # When set, every state-changing API call must send it as the X-API-Key header.
     # Unset means open access, which is only appropriate for local development.
     api_key: str | None = None

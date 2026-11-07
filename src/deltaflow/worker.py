@@ -63,6 +63,7 @@ class SinkWorker:
         sleep: Callable[[float], None] | None = None,
         dead_letters: DeadLetterQueue | None = None,
         max_consecutive_dead_letters: int = 50,
+        heartbeat: Callable[[], None] | None = None,
     ) -> None:
         self._consumer = consumer
         self._sink = sink
@@ -76,6 +77,7 @@ class SinkWorker:
         self._dead_letters = dead_letters
         self._max_consecutive = max_consecutive_dead_letters
         self._consecutive_dead = 0
+        self._heartbeat = heartbeat
         self._stop: threading.Event | None = None
         self.dead_lettered = 0
 
@@ -125,6 +127,8 @@ class SinkWorker:
         self._stop = stop
         try:
             while not stop.is_set():
+                if self._heartbeat is not None:
+                    self._heartbeat()  # proves the loop is turning, even when idle
                 self.run_once()
         except _ShutdownRequested:
             log.info("shutdown requested during a retry; the open batch will be redelivered")

@@ -340,3 +340,18 @@ def test_shutdown_lets_the_batch_in_flight_finish_and_commit() -> None:
     _worker(consumer, sink).run(stop)
 
     assert len(sink.batches) == 1 and len(consumer.commits) == 1  # finished, committed, exited
+
+
+def test_heartbeat_beats_before_every_batch_even_when_idle() -> None:
+    stop = threading.Event()
+    beats: list[int] = []
+    consumer = FakeConsumer()  # always idle
+
+    def beat() -> None:
+        beats.append(1)
+        if len(beats) == 3:
+            stop.set()
+
+    SinkWorker(consumer, RecordingSink(), heartbeat=beat, sleep=lambda _: None).run(stop)
+
+    assert len(beats) == 3  # an idle worker still proves its loop is turning

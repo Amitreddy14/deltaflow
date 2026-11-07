@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections.abc import Callable
+from pathlib import Path
 
 from confluent_kafka import Consumer, Producer
 from elasticsearch import Elasticsearch
 from pymongo import MongoClient
 
+from deltaflow.config import get_settings
 from deltaflow.deadletter import KafkaDeadLetterQueue, dlq_topic, ensure_topic_on
 from deltaflow.sinks.base import Sink
 from deltaflow.sinks.elasticsearch import ElasticsearchSink, ensure_index_template
@@ -26,6 +29,29 @@ def kafka_consumer_config(bootstrap_servers: str, group_id: str) -> dict[str, ob
         "enable.auto.commit": False,  # offsets are committed by the worker, after the sink ack
         "topic.metadata.refresh.interval.ms": 5000,  # notice topics the connector creates later
     }
+
+
+def heartbeat_writer(path: str | None) -> Callable[[], None] | None:
+    """A function that touches `path`, or None when no heartbeat is configured.
+
+    Failing to write is logged once and then ignored: a read-only file system must not take
+    down a healthy worker.
+    """
+    if not path:
+        return None
+    target = Path(path)
+    warned = False
+
+    def beat() -> None:
+        nonlocal warned
+        try:
+            target.touch()
+        except OSError as exc:
+            if not warned:
+                log.warning("cannot write heartbeat file %s: %s", target, exc)
+                warned = True
+
+    return beat
 
 
 def _consume_into(
@@ -57,7 +83,13 @@ def _consume_into(
             topic_pattern,
             dead_letter_topic or "off",
         )
-        SinkWorker(consumer, sink, batch_size=batch_size, dead_letters=dead_letters).run(stop)
+        SinkWorker(
+            consumer,
+            sink,
+            batch_size=batch_size,
+            dead_letters=dead_letters,
+            heartbeat=heartbeat_writer(get_settings().heartbeat_file),
+        ).run(stop)
     finally:
         consumer.close()
         if producer is not None:
