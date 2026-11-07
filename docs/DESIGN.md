@@ -99,7 +99,7 @@ Net result: effectively-once visible state, with simple and testable code.
 | Elasticsearch or MongoDB down | Worker retries with exponential backoff and pauses consumption. Kafka retains events, so lag grows and then drains. |
 | Poison event (cannot be transformed or is rejected permanently) | Published to a per-sink dead-letter topic with the error attached (the bad event is found by bisecting the batch); the partition keeps moving. Transient failures are retried, never dead-lettered. See ADR-0010. |
 | Kafka Connect crashes | Connector offsets live in Kafka; Debezium resumes from its last committed LSN. The replication slot retains WAL meanwhile. |
-| Connector stopped for a long time | The replication slot makes Postgres retain WAL, which can fill the disk. Mitigation: slot-lag monitoring and `max_slot_wal_keep_size`, covered in the operations phase. |
+| Connector stopped for a long time | The replication slot makes Postgres retain WAL, which can fill the disk. Mitigation: the production compose file sets `max_slot_wal_keep_size=5GB`, which protects the disk at the cost of invalidating the slot if the outage outlasts the cap (recovery: [deployment guide](deployment.md), ADR-0013). |
 | Schema change on source | Debezium schema history picks up new columns; sinks tolerate additive changes (Elasticsearch dynamic mapping, schemaless Mongo). Breaking changes go to the dead-letter topic. |
 | Sink needs rebuilding | Reset the sink consumer group offsets to earliest, or trigger a Debezium incremental snapshot. |
 

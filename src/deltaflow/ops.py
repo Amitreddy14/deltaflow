@@ -19,10 +19,9 @@ import httpx
 import psycopg
 from confluent_kafka import OFFSET_INVALID, Consumer, TopicPartition
 from confluent_kafka.admin import AdminClient
-from elasticsearch import Elasticsearch
-from pymongo import MongoClient
 
 from deltaflow import connect, deadletter
+from deltaflow.clients import elasticsearch_client, mongo_client
 from deltaflow.config import Settings
 
 log = logging.getLogger(__name__)
@@ -70,14 +69,12 @@ def _check_connect(url: str) -> None:
 
 
 def _check_elasticsearch(url: str) -> None:
-    with Elasticsearch(url, request_timeout=CHECK_TIMEOUT_SECONDS, max_retries=0) as es:
+    with elasticsearch_client(url, request_timeout=CHECK_TIMEOUT_SECONDS, max_retries=0) as es:
         es.info()
 
 
 def _check_mongo(url: str) -> None:
-    client: MongoClient[dict[str, Any]] = MongoClient(
-        url, serverSelectionTimeoutMS=int(CHECK_TIMEOUT_SECONDS * 1000)
-    )
+    client = mongo_client(url, timeout_ms=int(CHECK_TIMEOUT_SECONDS * 1000))
     try:
         client.admin.command("ping")
     finally:

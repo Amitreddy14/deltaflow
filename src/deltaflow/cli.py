@@ -136,6 +136,14 @@ def build_parser() -> argparse.ArgumentParser:
     bench_cmd.add_argument("--timeout", type=float, default=300.0)
     bench_cmd.add_argument("--keep", action="store_true", help="leave the benchmark rows in place")
     bench_cmd.add_argument("--json", type=Path, default=None, help="also write results as JSON")
+
+    genv = commands.add_parser(
+        "gen-env", help="write .env.prod with freshly generated secrets (production deploys)"
+    )
+    genv.add_argument("--domain", required=True, help="public hostname, e.g. deltaflow.example.com")
+    genv.add_argument("--email", required=True, help="contact address for Let's Encrypt")
+    genv.add_argument("--version", default="latest", help="image tag to deploy")
+    genv.add_argument("--dir", type=Path, default=Path("."), help="where to write the files")
     return parser
 
 
@@ -202,11 +210,10 @@ def _dlq(args: argparse.Namespace) -> None:
 
 
 def _search(args: argparse.Namespace) -> None:
-    from elasticsearch import Elasticsearch
-
+    from deltaflow.clients import elasticsearch_client
     from deltaflow.sinks.elasticsearch import search_documents
 
-    with Elasticsearch(args.elasticsearch_url) as es:
+    with elasticsearch_client(args.elasticsearch_url) as es:
         hits = search_documents(es, args.table, args.text, size=args.size)
     for hit in hits:
         print(f"id={hit['id']} score={hit['score']:.2f} {json.dumps(hit['doc'])[:160]}")
@@ -231,12 +238,12 @@ def _cell(value: Any) -> str:
 
 
 def _analytics(args: argparse.Namespace) -> None:
-    from pymongo import MongoClient
+    from deltaflow.clients import mongo_client
 
     since = (
         datetime.now(UTC) - timedelta(minutes=args.since_minutes) if args.since_minutes else None
     )
-    client: MongoClient[dict[str, Any]] = MongoClient(args.mongo_url, serverSelectionTimeoutMS=5000)
+    client = mongo_client(args.mongo_url, timeout_ms=5000)
     try:
         rows = analytics.run_report(
             client[args.mongo_database], args.report, unit=args.unit, since=since
@@ -311,12 +318,26 @@ def _bench(args: argparse.Namespace) -> int:
     return 0
 
 
-def _verify(args: argparse.Namespace) -> int:
-    from elasticsearch import Elasticsearch
-    from pymongo import MongoClient
+def _gen_env(args: argparse.Namespace) -> int:
+    from deltaflow import envgen
 
-    es = Elasticsearch(args.elasticsearch_url)
-    mongo: MongoClient[dict[str, Any]] = MongoClient(args.mongo_url, serverSelectionTimeoutMS=5000)
+    try:
+        written = envgen.generate(
+            args.dir, domain=args.domain, email=args.email, version=args.version
+        )
+    except (ValueError, envgen.EnvExists) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(f"wrote {written.env_file} (owner-only) and {written.api_key_file}")
+    print("Your API key is the DELTAFLOW_API_KEY line in .env.prod. Keep these files private.")
+    return 0
+
+
+def _verify(args: argparse.Namespace) -> int:
+    from deltaflow.clients import elasticsearch_client, mongo_client
+
+    es = elasticsearch_client(args.elasticsearch_url)
+    mongo = mongo_client(args.mongo_url, timeout_ms=5000)
     try:
         db = mongo[args.mongo_database]
         source, sinks, problems = verify.wait_until_consistent(
@@ -396,6 +417,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _chaos(args)
         elif args.command == "bench":
             return _bench(args)
+        elif args.command == "gen-env":
+            return _gen_env(args)
     except (connect.ConnectError, httpx.HTTPError, RuntimeError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

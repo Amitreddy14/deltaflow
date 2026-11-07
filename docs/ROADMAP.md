@@ -12,8 +12,9 @@ Each phase is one branch (`phase-N-name`), one PR into `main` with green CI, and
 | **4. Reliability** ✅ | Manual offset commits, retry with backoff, dead-letter topics, graceful shutdown, tombstone and snapshot handling | Poison events are quarantined; sinks survive restarts without loss |
 | **5. Control plane** ✅ | FastAPI endpoints: connector register/pause/resume, pipeline status, consumer lag, readiness checks, Prometheus metrics | Operator can see and steer the pipeline over HTTP |
 | **6. Proof** ✅ | Integration suite in CI, chaos demo (kill workers mid-stream), load test, benchmarks in README | Demo script ends with `PASS`: sinks equal the source |
-| **7. Deploy + polish** | Production compose with auth, deployment guide for free hosting, backup notes, README, diagrams | Reproducible deployment from the guide; repo reads like a product |
+| **7. Deploy + polish** ✅ | Production compose with auth, deployment guide for free hosting, backup notes, README, diagrams | Reproducible deployment from the guide; repo reads like a product |
 
-Phase 7 follows the same approach as Revenant: ship production deploy files and a guide,
-and perform the real deployment when a free cloud account (for example Oracle Cloud Always
-Free, whose ARM VM has enough memory for the full stack) is available.
+Phase 7 ships the production deploy files and a guide ([deployment](deployment.md)). The first
+real deployment, on a free Oracle Cloud Always Free ARM VM, is the remaining manual step, because
+it needs a cloud account. Ideas beyond the roadmap: Kafka SASL/TLS, schema-change handling in the
+sinks, multi-broker replication, per-user API authentication.

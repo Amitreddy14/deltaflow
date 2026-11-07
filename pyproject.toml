@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "deltaflow"
-version = "0.1.0"
+version = "1.0.0"
 description = "Change data capture platform: stream PostgreSQL inserts, updates and deletes to Elasticsearch and MongoDB through Kafka."
 readme = "README.md"
 requires-python = ">=3.11"

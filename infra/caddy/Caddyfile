@@ -1,0 +1,24 @@
+# Public entry point. Caddy obtains and renews a Let's Encrypt certificate for $DOMAIN by itself;
+# ports 80 and 443 must be reachable from the internet for that to work.
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	# Control-plane requests are tiny; cap bodies so nobody can stream junk at the API.
+	request_body {
+		max_size 1MB
+	}
+
+	reverse_proxy api:8000
+}

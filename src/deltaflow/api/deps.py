@@ -32,13 +32,33 @@ def get_ops() -> Ops:
 OpsDep = Annotated[Ops, Depends(get_ops)]
 
 
-def require_api_key(x_api_key: Annotated[str | None, Header()] = None) -> None:
+def _presented_key(x_api_key: str | None, authorization: str | None) -> str | None:
+    """The key a caller sent: X-API-Key, or ``Authorization: Bearer <key>`` (what Prometheus
+    and most HTTP tooling can send)."""
+    if x_api_key:
+        return x_api_key
+    if authorization:
+        scheme, _, token = authorization.partition(" ")
+        if scheme.lower() == "bearer" and token.strip():
+            return token.strip()
+    return None
+
+
+def require_api_key(
+    x_api_key: Annotated[str | None, Header()] = None,
+    authorization: Annotated[str | None, Header()] = None,
+) -> None:
     """Guard for state-changing endpoints. With no key configured access is open (local dev)."""
     expected = get_settings().api_key
     if not expected:
         return
-    if x_api_key is None or not secrets.compare_digest(x_api_key, expected):
-        raise HTTPException(status_code=401, detail="missing or invalid X-API-Key")
+    presented = _presented_key(x_api_key, authorization)
+    if presented is None or not secrets.compare_digest(presented.encode(), expected.encode()):
+        raise HTTPException(
+            status_code=401,
+            detail="missing or invalid API key (X-API-Key or Authorization: Bearer)",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 
 @contextmanager

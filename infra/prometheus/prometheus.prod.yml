@@ -1,0 +1,14 @@
+# Production scrape config (docker compose -f docker-compose.prod.yml --profile monitoring up -d).
+# The API requires its key on /metrics, so Prometheus sends it as a Bearer token read from a file
+# that `deltaflow gen-env` writes to secrets/prometheus_api_key.
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: deltaflow
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secrets/api_key
+    static_configs:
+      - targets: ["api:8000"]

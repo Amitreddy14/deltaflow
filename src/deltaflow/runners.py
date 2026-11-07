@@ -8,9 +8,8 @@ from collections.abc import Callable
 from pathlib import Path
 
 from confluent_kafka import Consumer, Producer
-from elasticsearch import Elasticsearch
-from pymongo import MongoClient
 
+from deltaflow.clients import elasticsearch_client, mongo_client
 from deltaflow.config import get_settings
 from deltaflow.deadletter import KafkaDeadLetterQueue, dlq_topic, ensure_topic_on
 from deltaflow.sinks.base import Sink
@@ -107,7 +106,7 @@ def run_es_sink(
     stop: threading.Event,
     dead_letter_topic: str | None = dlq_topic("es"),
 ) -> None:
-    es = Elasticsearch(elasticsearch_url)
+    es = elasticsearch_client(elasticsearch_url)
     try:
         ensure_index_template(es)
         sink = ElasticsearchSink(es)
@@ -137,7 +136,7 @@ def run_mongo_sink(
     stop: threading.Event,
     dead_letter_topic: str | None = dlq_topic("mongo"),
 ) -> None:
-    client: MongoClient[dict[str, object]] = MongoClient(mongo_url, serverSelectionTimeoutMS=10000)
+    client = mongo_client(mongo_url)
     try:
         db = client[mongo_database]
         ensure_history_indexes(db)

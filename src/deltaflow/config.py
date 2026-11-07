@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     # A sink worker touches this file every loop, so a container healthcheck can tell a worker
     # that is consuming from one that is hung. Unset disables the heartbeat.
     heartbeat_file: str | None = None
+    # Elasticsearch basic auth (production enables xpack security). Unset means no auth.
+    elasticsearch_user: str | None = None
+    elasticsearch_password: str | None = None
+    # Production switch: the API refuses to start without an api_key, and every route except
+    # /health then requires it (including reads, /metrics and the connector config).
+    auth_required: bool = False
     # When set, every state-changing API call must send it as the X-API-Key header.
     # Unset means open access, which is only appropriate for local development.
     api_key: str | None = None
