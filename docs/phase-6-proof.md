@@ -89,3 +89,11 @@ lint/type/unit job passes.
 - **`docker was not found`:** run from a terminal where `docker` works, in the repository folder (the commands use the project's compose file).
 - **`FAIL` with missing rows in one sink:** keep the output; it names the table, sink and ids. Check that sink's logs and `deltaflow dlq show <sink>`.
 - **Chaos leaves a service stopped:** `docker compose up -d`.
+
+## Sink health checks
+
+`docker compose up --wait` needs every service to report healthy, so the sinks have a real
+healthcheck: each worker touches `/tmp/heartbeat` at the start of every loop (including idle
+polls), and Docker marks the container unhealthy if that file is older than 120 seconds. That
+catches a hung worker, not only a crashed one. The heartbeat is enabled by
+`DELTAFLOW_HEARTBEAT_FILE`; unset (the default outside compose) it does nothing.

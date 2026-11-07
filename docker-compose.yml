@@ -158,11 +158,18 @@ services:
       elasticsearch:
         condition: service_healthy
     environment:
+      DELTAFLOW_HEARTBEAT_FILE: /tmp/heartbeat
       DELTAFLOW_ENVIRONMENT: docker
       DELTAFLOW_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       DELTAFLOW_ELASTICSEARCH_URL: http://elasticsearch:9200
     healthcheck:
-      disable: true # the image's HTTP healthcheck belongs to the API; this process has no port
+      # No port to probe, so the worker touches a file every loop and we check it is fresh. That
+      # fails for a hung worker too, not only a dead one.
+      test: ["CMD", "python", "-c", "import os,sys,time; sys.exit(0 if time.time()-os.path.getmtime('/tmp/heartbeat') < 120 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
   # Streams change events into MongoDB: current state plus an append-only history.
   mongo-sink:
@@ -177,11 +184,18 @@ services:
       mongodb:
         condition: service_healthy
     environment:
+      DELTAFLOW_HEARTBEAT_FILE: /tmp/heartbeat
       DELTAFLOW_ENVIRONMENT: docker
       DELTAFLOW_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       DELTAFLOW_MONGO_URL: mongodb://mongodb:27017
     healthcheck:
-      disable: true # the image's HTTP healthcheck belongs to the API; this process has no port
+      # No port to probe, so the worker touches a file every loop and we check it is fresh. That
+      # fails for a hung worker too, not only a dead one.
+      test: ["CMD", "python", "-c", "import os,sys,time; sys.exit(0 if time.time()-os.path.getmtime('/tmp/heartbeat') < 120 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
   # Optional metrics store: docker compose --profile monitoring up -d
   prometheus:
