@@ -34,3 +34,34 @@ def test_search_takes_a_table_and_text() -> None:
     args = build_parser().parse_args(["search", "customers", "Reddy", "--size", "3"])
 
     assert (args.table, args.text, args.size) == ("customers", "Reddy", 3)
+
+
+def test_run_mongo_sink_defaults() -> None:
+    args = build_parser().parse_args(["run-mongo-sink"])
+
+    assert args.group_id == "deltaflow-mongo-sink"  # its own consumer group, independent of ES
+    assert args.mongo_database == "deltaflow"
+
+
+def test_analytics_only_accepts_known_reports() -> None:
+    assert build_parser().parse_args(["analytics", "transitions"]).report == "transitions"
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["analytics", "bogus"])
+
+
+def test_verify_accepts_a_wait() -> None:
+    assert build_parser().parse_args(["verify", "--wait", "30"]).wait == 30.0
+
+
+def test_format_table_aligns_columns_and_handles_no_rows() -> None:
+    from deltaflow.cli import format_table
+
+    table = format_table([{"status": "paid", "n": 12}, {"status": "shipped", "n": 3}])
+
+    assert table.splitlines() == [
+        "status   n ",
+        "-------  --",
+        "paid     12",
+        "shipped  3 ",
+    ]
+    assert format_table([]) == "(no rows)"

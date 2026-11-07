@@ -7,7 +7,7 @@ or events are replayed.
 
 [![CI](https://github.com/Amitreddy14/deltaflow/actions/workflows/ci.yml/badge.svg)](https://github.com/Amitreddy14/deltaflow/actions/workflows/ci.yml)
 
-> **Status:** Phase 2 complete: row changes flow from Postgres through Kafka into Elasticsearch, with replay-safe writes. MongoDB arrives in Phase 3. See the [roadmap](docs/ROADMAP.md).
+> **Status:** Phase 3 complete: row changes flow from Postgres through Kafka into Elasticsearch (search) and MongoDB (current state, history, analytics), with replay-safe writes. See the [roadmap](docs/ROADMAP.md).
 
 ## Architecture
 
@@ -66,6 +66,19 @@ deltaflow search orders "status:shipped"
 
 Details, failure demos (stop the sink, replay all history) and troubleshooting:
 [docs/phase-2-es-sink.md](docs/phase-2-es-sink.md).
+
+### Analytics in MongoDB and cross-store check (Phase 3)
+
+```bash
+pip install -e ".[dev]"                      # adds pymongo
+docker compose up -d --wait --build          # also starts the mongo-sink worker
+deltaflow loadgen --rate 5 --duration 30
+deltaflow verify --wait 30                   # Postgres == Elasticsearch == MongoDB
+deltaflow analytics transitions
+```
+
+Collections, reports, failure demos and troubleshooting:
+[docs/phase-3-mongo-sink.md](docs/phase-3-mongo-sink.md).
 
 Optional Kafka browser UI: `docker compose --profile tools up -d` then open http://localhost:8080.
 

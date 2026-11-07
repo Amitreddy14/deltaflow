@@ -158,6 +158,24 @@ services:
     healthcheck:
       disable: true # the image's HTTP healthcheck belongs to the API; this process has no port
 
+  # Streams change events into MongoDB: current state plus an append-only history.
+  mongo-sink:
+    build: .
+    image: deltaflow:local
+    command: ["deltaflow", "run-mongo-sink"]
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+    environment:
+      DELTAFLOW_ENVIRONMENT: docker
+      DELTAFLOW_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      DELTAFLOW_MONGO_URL: mongodb://mongodb:27017
+    healthcheck:
+      disable: true # the image's HTTP healthcheck belongs to the API; this process has no port
+
   # Optional UI for browsing topics and messages: docker compose --profile tools up -d
   kafka-ui:
     image: provectuslabs/kafka-ui:v0.7.2
